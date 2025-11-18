@@ -1,0 +1,92 @@
+# docker-compose.pi.yml - Deployment Compose file for Raspberry Pi
+# ---------------------------------------------------------------
+# This Compose definition is intended for running the PBX on a Raspberry Pi.
+# Key characteristics:
+#   - Uses a pre-built multi-architecture image hosted on GitHub Container
+#     Registry (GHCR).
+#   - Maps SIP and RTP ports explicitly instead of using host networking,
+#     which provides clearer firewall control on the Pi.
+#   - Assumes that Twilio credentials are provided via environment variables
+#     or env_file on the Pi (set up manually or via Ansible).
+#   - Configured with a restart policy suitable for a small always-on PBX.
+
+version: "3.9"
+
+services:
+  pbx:
+    # ------------------------------
+    # Image reference
+    # ------------------------------
+    # NOTE: Replace <OWNER> with your GitHub username or organisation name.
+    # The build-and-push GitHub Action tags images in this format.
+    image: ghcr.io/<OWNER>/asterisk-twilio-pbx:latest
+
+    container_name: asterisk-twilio-pbx
+
+    # ------------------------------
+    # Environment handling
+    # ------------------------------
+    # We deliberately do not bake Twilio credentials into the Compose file.
+    # You have two main options on the Pi:
+    #   1. Provide a local .env file alongside this compose file and use
+    #      `env_file` (recommended for simple setups).
+    #   2. Define environment variables in the shell/service that invokes
+    #      `docker compose`.
+    # Adjust the following section as suits your environment. By default we
+    # reference an .env file in the same directory as this compose file.
+
+    env_file:
+      - .env
+
+    # ------------------------------
+    # Volumes and configuration
+    # ------------------------------
+    # For simplicity in this initial deployment, we rely on the configuration
+    # files baked into the image. This keeps the Pi set-up minimal.
+    #
+    # If you prefer to manage configs on the Pi directly, you can instead
+    # mount a host directory over /etc/asterisk here, similar to the dev
+    # compose file. For example:
+    #   volumes:
+    #     - /opt/asterisk-twilio-pbx/asterisk:/etc/asterisk:ro
+    #
+    # For now we omit volumes entirely so the container uses its internal
+    # configuration.
+
+    # volumes:
+    #   - /opt/asterisk-twilio-pbx/asterisk:/etc/asterisk:ro
+
+    # ------------------------------
+    # Networking and ports
+    # ------------------------------
+    # We expose SIP and RTP ports explicitly to give the Pi firewall a clear,
+    # minimal set of openings. You should additionally configure iptables or
+    # ufw to restrict access to trusted IP ranges (for example, Twilio's SIP
+    # signalling ranges) and selected management hosts.
+
+    ports:
+      - "5060:5060/udp"         # SIP UDP signalling.
+      - "5060:5060/tcp"         # SIP TCP signalling (optional, for future use).
+      - "5061:5061/tcp"         # SIP TLS (reserved for a later iteration).
+      - "10000-10100:10000-10100/udp"  # RTP media range.
+
+    # ------------------------------
+    # Restart policy
+    # ------------------------------
+    # `unless-stopped` is a sensible default for a small PBX: the service will
+    # restart automatically on crashes and on host reboot, and only stay down
+    # if you explicitly stop it.
+    restart: unless-stopped
+
+    # ------------------------------
+    # Security and assumptions
+    # ------------------------------
+    # Assumptions for this deployment:
+    #   - The Pi is behind a home/office router with NAT, and you will
+    #     configure port forwarding as required for Twilio to reach it (if
+    #     you intend to receive inbound calls).
+    #   - A local firewall is configured to restrict SIP/RTP access to trusted
+    #     sources where possible (e.g. Twilio IP ranges and/or your own
+    #     management hosts).
+    #   - Dynamic DNS or a static IP is used to give Twilio a stable target,
+    #     if inbound calls are required.

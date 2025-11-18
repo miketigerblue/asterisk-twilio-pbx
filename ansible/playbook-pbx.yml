@@ -1,0 +1,19 @@
+# playbook-pbx.yml - Top-level playbook for PBX deployment
+# --------------------------------------------------------
+# This playbook targets the [pbx_pi] group defined in inventory.ini and applies
+# the pbx_pi role to prepare the Raspberry Pi and deploy the Asterisk/Twilio
+# PBX container stack. It uses privilege escalation (become) where necessary
+# to install packages and manage system services.
+
+- name: Deploy Asterisk/Twilio PBX to Raspberry Pi
+  hosts: pbx_pi
+  become: true
+  vars:
+    # High-level play variables could be added here if needed. For now, we
+    # rely on group_vars and role vars for most configuration.
+  roles:
+    - pbx_pi
+
+  # The play itself is intentionally simple: all detailed work is delegated to
+  # the pbx_pi role defined under ansible/roles/pbx_pi. This keeps the
+  # top-level playbook easy to read and reuse.

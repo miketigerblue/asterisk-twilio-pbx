@@ -1,0 +1,124 @@
+; pjsip.conf.template - Asterisk PJSIP configuration for Twilio SIP trunking
+; ---------------------------------------------------------------------------
+; This file is a template which is rendered at container start-up by
+; docker/entrypoint.sh using envsubst. It defines:
+;   - Transports (UDP and optional TCP) for signalling with Twilio.
+;   - Authentication object using Twilio credentials.
+;   - Address of record (AOR) pointing at Twilio's SIP domain.
+;   - Endpoint configuration for placing outbound calls.
+;   - Registration to Twilio using the endpoint/auth details.
+; All Twilio-specific credentials and domains are provided via environment
+; variables so that nothing secret is stored in this repository.
+;
+; Environment variables used:
+;   ${TWILIO_USERNAME}  - Twilio SIP trunk username.
+;   ${TWILIO_PASSWORD}  - Twilio SIP trunk password.
+;   ${TWILIO_DOMAIN}    - Twilio SIP domain, e.g. youraccount.sip.twilio.com.
+;
+; Relationship between objects:
+;   - The [twilio-transport-udp] and [twilio-transport-tcp] sections define
+;     how Asterisk talks to Twilio at the transport layer.
+;   - The [twilio-auth] section uses the username/password to authenticate.
+;   - The [twilio-aor] section describes where to send SIP requests (Twilio).
+;   - The [twilio-endpoint] section ties together auth + aor + transport and
+;     is what the dialplan uses when placing calls.
+;   - The [twilio-registration] section tells Asterisk to register with Twilio
+;     so that Twilio recognises and accepts calls from this PBX.
+
+[global]
+; Global PJSIP options can be placed here if needed. We keep this minimal and
+; secure by default.
+; TODO: In future, consider adding global settings such as `max_forwards` or
+;       logger options as required.
+
+; ------------------------------
+; Transports
+; ------------------------------
+; Define how Asterisk listens for and sends SIP signalling. We keep this simple
+; with an IPv4 UDP transport primarily, and a TCP transport in case that is
+; preferred or required in your environment. TLS is not configured here but
+; can be added in a later iteration.
+
+[twilio-transport-udp]
+type=transport
+protocol=udp
+bind=0.0.0.0:5060            ; Listen on all interfaces for UDP SIP on port 5060.
+allow_reload=yes             ; Allow reloading this transport without restart.
+
+[twilio-transport-tcp]
+type=transport
+protocol=tcp
+bind=0.0.0.0:5060            ; TCP transport on the same port; may be useful
+                             ; behind certain firewalls/NATs.
+allow_reload=yes
+
+; ------------------------------
+; Authentication object
+; ------------------------------
+; This auth section encapsulates the Twilio SIP trunk credentials. Note that
+; the username and password are provided via environment variables (rendered
+; into this file by envsubst) rather than being committed to source control.
+
+[twilio-auth]
+type=auth
+auth_type=userpass
+username=${TWILIO_USERNAME}  ; Twilio SIP trunk username.
+password=${TWILIO_PASSWORD}  ; Twilio SIP trunk password (keep secret!).
+
+; ------------------------------
+; Address of record (AOR)
+; ------------------------------
+; The AOR describes where to send SIP requests. Twilio uses a DNS name of the
+; form youraccount.sip.twilio.com. We configure Asterisk to contact that
+; domain on the default SIP port.
+
+[twilio-aor]
+type=aor
+contact=sip:${TWILIO_DOMAIN}:5060   ; Twilio SIP entry point.
+
+; ------------------------------
+; Endpoint (what the dialplan references)
+; ------------------------------
+; The endpoint ties together the auth and AOR and defines how media and
+; codecs should be negotiated. The dialplan will reference this endpoint by
+; name (e.g. `Dial(PJSIP/${EXTEN}@twilio-endpoint)`).
+
+[twilio-endpoint]
+type=endpoint
+transport=twilio-transport-udp       ; Default to UDP transport.
+; transport=twilio-transport-tcp    ; Uncomment if you prefer TCP.
+aors=twilio-aor
+outbound_auth=twilio-auth
+context=outbound                     ; Incoming calls from Twilio would land
+                                     ; in this context if configured.
+allow=alaw,ulaw                      ; Prefer G.711 A-law / µ-law.
+; TODO: Add G.729 or Opus if your licensing and environment require it.
+
+; Security-related options
+; ------------------------
+; We keep these conservative. Consider tightening further depending on your
+; environment (e.g. specifying `language`, disabling direct media, etc.).
+
+rewrite_contact=yes                  ; Helps with NAT traversal.
+rtp_symmetric=yes                    ; Enforce symmetric RTP for NAT.
+force_rport=yes                      ; Send responses back to the source port.
+
+; ------------------------------
+; Registration to Twilio
+; ------------------------------
+; This section defines how Asterisk registers with Twilio so that Twilio
+; recognises the PBX and permits calls. The client URI uses the Twilio
+; username, and the server URI points at the Twilio SIP domain.
+
+[twilio-registration]
+type=registration
+transport=twilio-transport-udp
+outbound_auth=twilio-auth
+retry_interval=60                    ; Retry registration every 60 seconds.
+max_retries=10                       ; Give up after 10 attempts (tune as needed).
+expiration=600                       ; Registration expiry in seconds.
+contact_user=${TWILIO_USERNAME}      ; User part for Contact header.
+client_uri=sip:${TWILIO_USERNAME}@${TWILIO_DOMAIN}
+server_uri=sip:${TWILIO_DOMAIN}
+
+; End of pjsip.conf.template

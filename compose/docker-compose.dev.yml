@@ -1,0 +1,78 @@
+# docker-compose.dev.yml - Development Compose file for macOS
+# ----------------------------------------------------------
+# This Compose definition is optimised for local development on macOS.
+# Key characteristics:
+#   - Builds the Asterisk/Twilio PBX image from the local Dockerfile.
+#   - Uses host networking to simplify SIP/RTP testing from softphones on
+#     the same machine.
+#   - Bind-mounts the local ./asterisk directory into /etc/asterisk inside
+#     the container, so you can edit configuration files live.
+#   - Loads Twilio credentials from a local .env file (not committed to git).
+
+version: "3.9"
+
+services:
+  pbx:
+    # ------------------------------
+    # Image build configuration
+    # ------------------------------
+    # Build the image from the local Dockerfile in ./docker. During CI we will
+    # build and push a multi-arch image, but for local development this
+    # direct build is convenient.
+    build:
+      context: ..              # Project root as build context.
+      dockerfile: docker/Dockerfile
+
+    # Give the container a predictable name for debugging and reuse.
+    container_name: asterisk-twilio-pbx-dev
+
+    # ------------------------------
+    # Environment handling
+    # ------------------------------
+    # Load Twilio credentials and any additional settings from a .env file in
+    # the project root. We commit only .env.example; you should copy that to
+    # .env and fill in your own values locally.
+    env_file:
+      - ../.env
+
+    # ------------------------------
+    # Volumes and configuration
+    # ------------------------------
+    # Bind-mount the local Asterisk configuration directory so that changes to
+    # pjsip.conf.template, extensions.conf, etc., can be made live whilst the
+    # container is running. The entrypoint will re-render pjsip.conf on each
+    # container start, so restart the container after changing credentials or
+    # template fields.
+    volumes:
+      - ../asterisk:/etc/asterisk:rw
+
+    # ------------------------------
+    # Networking
+    # ------------------------------
+    # Host networking is used on macOS to simplify SIP and RTP handling. This
+    # exposes Asterisk directly on the host's network stack, meaning that
+    # SIP clients on the same host (or on the LAN, subject to firewall
+    # rules) can talk to it without explicit port mappings.
+    #
+    # WARNING: Host networking should be used with care. Only run this on a
+    # trusted development machine and with sensible firewalling.
+    network_mode: "host"
+
+    # ------------------------------
+    # Restart policy
+    # ------------------------------
+    # For development we typically do not want automatic restarts if the
+    # container exits, to make debugging easier. Change to `unless-stopped`
+    # if you prefer auto-restarts locally.
+    restart: "no"
+
+    # ------------------------------
+    # Logging options
+    # ------------------------------
+    # Default Docker logging is usually sufficient; you may add limits here if
+    # you are concerned about log file sizes.
+    # logging:
+    #   driver: "json-file"
+    #   options:
+    #     max-size: "10m"
+    #     max-file: "3"

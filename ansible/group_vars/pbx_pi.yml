@@ -1,0 +1,21 @@
+# pbx_pi.yml - Group variables for pbx_pi hosts
+# -------------------------------------------
+# This file defines variables that apply to all hosts in the [pbx_pi] group.
+# These values are used by the pbx_pi Ansible role to determine where the
+# project should live on the Raspberry Pi and which container image to run.
+
+# Directory on the Raspberry Pi where the PBX project files (such as the
+# docker-compose.pi.yml used for deployment) will be stored. This location is
+# referenced by the role when creating directories and copying files.
+pbx_project_dir: /opt/asterisk-twilio-pbx
+
+# Docker image to deploy on the Raspberry Pi. Replace <OWNER> with your
+# GitHub username or organisation so that it matches the image published by
+# the build-and-push GitHub Action.
+pbx_image: "ghcr.io/<OWNER>/asterisk-twilio-pbx:latest"
+
+# Optional: path to the docker compose binary. On modern Docker installations,
+# `docker compose` is provided as a subcommand, so we default to that usage.
+# You may override this if your environment uses the legacy `docker-compose`
+# CLI instead.
+pbx_docker_compose_command: "docker compose"

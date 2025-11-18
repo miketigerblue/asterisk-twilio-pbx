@@ -1,0 +1,29 @@
+# main.yml - Role-specific variables for pbx_pi
+# -------------------------------------------
+# This file is intentionally kept minimal. Most deployment parameters are
+# defined in group_vars/pbx_pi.yml so that they can be shared across plays
+# and are easy to override. Here we provide only role-local defaults that are
+# unlikely to change often.
+
+# Name of the Docker service used on the Raspberry Pi. On many distributions,
+# Docker installs a systemd unit called `docker`. This value is used by the
+# role when ensuring that Docker is enabled and running.
+pbx_docker_service_name: "docker"
+
+# List of base packages to install on the Pi to support Docker-based
+# deployment. The exact package names may differ slightly between
+# distributions; this list targets Debian-based systems (e.g. Raspberry Pi OS).
+#
+# - docker.io: Docker engine package.
+# - docker-compose-plugin: Provides `docker compose` subcommand on modern
+#   Docker installations.
+# - git: Optional but useful if you later choose to pull the project directly
+#   onto the Pi using git.
+#
+# You can override this list in inventory/group vars if your distribution uses
+# different package names (for example, docker-ce from Docker's own
+# repositories).
+pbx_base_packages:
+  - docker.io
+  - docker-compose-plugin
+  - git

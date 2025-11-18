@@ -1,0 +1,66 @@
+# build-and-push.yml - Build and publish multi-arch PBX image to GHCR
+# -------------------------------------------------------------------
+# This workflow builds the Asterisk/Twilio PBX Docker image for multiple
+# architectures (amd64 and ARM variants) and publishes it to GitHub Container
+# Registry (GHCR). It is triggered on pushes to the main branch.
+
+name: Build and push PBX image
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-push:
+    name: Build and push multi-arch image to GHCR
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Required to push to GitHub Container Registry using the GITHUB_TOKEN.
+      contents: read
+      packages: write
+
+    steps:
+      - name: Check out repository
+        # Fetch the repository contents so that Docker has access to the
+        # Dockerfile, Asterisk configuration, and other project files.
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU for cross-platform builds
+        # QEMU allows the Docker Buildx builder to emulate non-native
+        # architectures (such as arm/v7 and arm64) on the GitHub-hosted
+        # amd64 runners, enabling multi-arch image builds.
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        # Buildx provides advanced build capabilities, including multi-arch
+        # support and cache management. We create a new builder instance and
+        # set it as the default for subsequent build commands.
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        # Authenticate with GHCR using the GitHub Actions-provided token. This
+        # allows the workflow to push images to ghcr.io under the current
+        # repository owner.
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push multi-architecture image
+        # Build the PBX Docker image for multiple architectures and push it to
+        # GHCR. The image is tagged with `latest` under the repository owner's
+        # namespace. The Dockerfile is located in ./docker and the build
+        # context is the repository root.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm/v7,linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/asterisk-twilio-pbx:latest
+          # Optionally, build arguments or labels could be added here to
+          # record build-time metadata (such as git SHA, build date, etc.).

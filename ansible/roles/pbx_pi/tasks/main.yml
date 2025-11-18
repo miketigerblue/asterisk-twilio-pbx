@@ -1,0 +1,111 @@
+# main.yml - Tasks for pbx_pi role
+# --------------------------------
+# This role prepares a Raspberry Pi host to run the Asterisk/Twilio PBX
+# container stack and then deploys it using Docker Compose. The tasks are
+# written to be idempotent so that rerunning the playbook results in minimal
+# changes when the system is already in the desired state.
+
+- name: Ensure base packages are installed
+  # Install the packages required to run Docker and docker compose on the Pi.
+  # We use the package list defined in pbx_base_packages (see vars/main.yml),
+  # which targets Debian-based systems such as Raspberry Pi OS.
+  ansible.builtin.package:
+    name: "{{ pbx_base_packages }}"
+    state: present
+  become: true
+
+- name: Ensure Docker service is enabled and running
+  # Docker must be running so that we can start containers. We manage the
+  # systemd service specified by pbx_docker_service_name (usually `docker`).
+  ansible.builtin.service:
+    name: "{{ pbx_docker_service_name }}"
+    state: started
+    enabled: true
+  become: true
+
+- name: Create PBX project directory
+  # Create the directory on the Pi where we will store the docker-compose
+  # file and any related assets. The path is configurable via pbx_project_dir.
+  ansible.builtin.file:
+    path: "{{ pbx_project_dir }}"
+    state: directory
+    owner: "{{ ansible_user | default('root') }}"
+    group: "{{ ansible_user | default('root') }}"
+    mode: "0755"
+  become: true
+
+- name: Copy Raspberry Pi docker-compose file to project directory
+  # Option A: We choose to copy the compose file from the control machine to
+  # the Pi using the `copy` module. This keeps the deployment simple and does
+  # not require that the project repository be cloned on the Pi itself.
+  #
+  # The file ansible/roles/pbx_pi/files/docker-compose.pi.yml is copied to the
+  # project directory. If you later change the compose file, re-running the
+  # playbook will update it automatically.
+  ansible.builtin.copy:
+    src: docker-compose.pi.yml
+    dest: "{{ pbx_project_dir }}/docker-compose.pi.yml"
+    owner: "{{ ansible_user | default('root') }}"
+    group: "{{ ansible_user | default('root') }}"
+    mode: "0644"
+  become: true
+
+- name: Ensure .env file exists on Pi (placeholder)
+  # This task creates a placeholder .env file on the Pi if one does not
+  # already exist. In a real deployment you would either copy a fully
+  # populated .env from the control machine or manage secrets using Ansible
+  # vault or environment-specific mechanisms. Here we simply ensure that the
+  # file is present and clearly commented.
+  ansible.builtin.copy:
+    dest: "{{ pbx_project_dir }}/.env"
+    content: |
+      # .env - Twilio credentials for PBX on Raspberry Pi
+      # -----------------------------------------------
+      # This file is created as a placeholder by Ansible. You MUST edit it on
+      # the Pi (or manage it securely via Ansible Vault/secrets management)
+      # to provide real values for the Twilio environment variables.
+      #
+      # TWILIO_USERNAME=your_twilio_username_here
+      # TWILIO_PASSWORD=your_twilio_password_here
+      # TWILIO_DOMAIN=youraccount.sip.twilio.com
+    owner: "{{ ansible_user | default('root') }}"
+    group: "{{ ansible_user | default('root') }}"
+    mode: "0600"
+    force: false    # Do not overwrite an existing .env file.
+  become: true
+
+- name: Log note about GHCR authentication assumptions
+  # This debug task documents our assumption regarding GHCR authentication on
+  # the Pi. For public images, docker can pull without a login. If you make
+  # your GHCR repository private, you must configure docker login on the Pi,
+  # for example by using Ansible to inject credentials or by logging in
+  # manually.
+  ansible.builtin.debug:
+    msg: >-
+      Assuming that the GHCR image {{ pbx_image }} is publicly accessible.
+      If it is private, configure `docker login ghcr.io` on the Pi to allow
+      image pulls (e.g. using Ansible or manual setup).
+
+- name: Pull PBX image using docker compose
+  # Use the docker compose CLI (pbx_docker_compose_command) to pull the
+  # latest version of the PBX image as referenced in the compose file. This
+  # helps ensure that redeployments fetch updated images.
+  ansible.builtin.command: >-
+    {{ pbx_docker_compose_command }} -f docker-compose.pi.yml pull
+  args:
+    chdir: "{{ pbx_project_dir }}"
+  register: pbx_pull_result
+  changed_when: "'Downloaded newer image' in pbx_pull_result.stdout or 'pulled' in pbx_pull_result.stdout"
+  become: true
+
+- name: Bring PBX stack up with docker compose
+  # Start (or update) the PBX container stack in detached mode. The command is
+  # idempotent: if the configuration and images have not changed, Docker will
+  # report that everything is up-to-date and Ansible will record no change.
+  ansible.builtin.command: >-
+    {{ pbx_docker_compose_command }} -f docker-compose.pi.yml up -d
+  args:
+    chdir: "{{ pbx_project_dir }}"
+  register: pbx_up_result
+  changed_when: "'Creating ' in pbx_up_result.stdout or 'Recreating ' in pbx_up_result.stdout"
+  become: true
