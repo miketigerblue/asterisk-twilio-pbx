@@ -43,6 +43,13 @@
 type=transport
 protocol=udp
 bind=0.0.0.0:5060            ; Listen on all interfaces for UDP SIP on port 5060.
+; For LAN phones, advertise the Pi's LAN IP (not the Docker bridge IP)
+external_signaling_address=${LAN_IP}
+external_media_address=${LAN_IP}
+; Docker bridge is the only network the container considers "local".
+; LAN phones must be treated as "external" so we never advertise 172.19.x.x
+; in SDP/Contact.
+local_net=172.19.0.0/16
 allow_reload=yes             ; Allow reloading this transport without restart.
 
 [twilio-transport-tcp]
@@ -50,6 +57,41 @@ type=transport
 protocol=tcp
 bind=0.0.0.0:5060            ; TCP transport on the same port; may be useful
                              ; behind certain firewalls/NATs.
+external_signaling_address=${LAN_IP}
+external_media_address=${LAN_IP}
+local_net=172.19.0.0/16
+allow_reload=yes
+
+[twilio-transport-tls]
+type=transport
+protocol=tls
+bind=0.0.0.0:5061
+cert_file=/etc/asterisk/keys/asterisk.pem
+priv_key_file=/etc/asterisk/keys/asterisk.pem
+method=tlsv1_2
+
+; Twilio presents a public CA-signed certificate; Asterisk/PJSIP does not
+; automatically use the system trust store unless pointed at it.
+ca_list_file=/etc/ssl/certs/ca-certificates.crt
+
+; Twilio's certificate chain typically uses wildcard identities (e.g.
+; *.sip.twilio.com). pjproject rejects wildcard certs by default (RFC 5922),
+; so we explicitly allow them for this transport.
+allow_wildcard_certs=yes
+
+; Verify Twilio's certificate (recommended). If you need to troubleshoot,
+; you can temporarily set this to "no" to confirm it's a verification issue.
+verify_server=yes
+
+; NAT / SDP: advertise the PBX public IP to Twilio so Twilio can send SRTP/RTP
+; back to a routable address (otherwise Asterisk advertises the Docker IP
+; like 172.19.0.2 and you get no audio).
+external_signaling_address=${EXTERNAL_IP}
+external_media_address=${EXTERNAL_IP}
+local_net=172.19.0.0/16
+
+; Leave `domain` unset so PJSIP uses the actual remote hostname.
+
 allow_reload=yes
 
 ; ------------------------------
@@ -74,7 +116,11 @@ password=${TWILIO_PASSWORD}  ; Twilio SIP trunk password (keep secret!).
 
 [twilio-aor]
 type=aor
-contact=sip:${TWILIO_DOMAIN}:5060   ; Twilio SIP entry point.
+; For PSTN termination Twilio typically uses a different domain suffix than
+; registration (e.g. <trunk>.pstn.twilio.com). Set TWILIO_PSTN_DOMAIN in .env.
+; Use a "sip:" URI even though we send it over TLS (via the endpoint transport).
+; Twilio termination commonly expects sip:+E164@<trunk>.pstn.twilio.com.
+contact=sip:${TWILIO_PSTN_DOMAIN}:5061
 
 ; ------------------------------
 ; Endpoint (what the dialplan references)
@@ -85,14 +131,27 @@ contact=sip:${TWILIO_DOMAIN}:5060   ; Twilio SIP entry point.
 
 [twilio-endpoint]
 type=endpoint
-transport=twilio-transport-udp       ; Default to UDP transport.
-; transport=twilio-transport-tcp    ; Uncomment if you prefer TCP.
+transport=twilio-transport-tls       ; Use TLS (required by some Twilio trunks).
 aors=twilio-aor
 outbound_auth=twilio-auth
 context=outbound                     ; Incoming calls from Twilio would land
                                      ; in this context if configured.
 allow=alaw,ulaw                      ; Prefer G.711 A-law / µ-law.
 ; TODO: Add G.729 or Opus if your licensing and environment require it.
+
+; Twilio can be configured to require secure media (SRTP). If Twilio responds
+; with "488 Secure media required", enable SRTP via SDES.
+direct_media=no
+media_encryption=sdes
+
+; Ensure the From domain matches the PSTN termination domain.
+from_domain=${TWILIO_PSTN_DOMAIN}
+
+; Send identity headers Twilio commonly expects when authenticating/validating
+; outbound caller ID.
+trust_id_outbound=yes
+send_pai=yes
+send_rpid=yes
 
 ; Security-related options
 ; ------------------------
@@ -112,13 +171,66 @@ force_rport=yes                      ; Send responses back to the source port.
 
 [twilio-registration]
 type=registration
-transport=twilio-transport-udp
+transport=twilio-transport-tls
 outbound_auth=twilio-auth
 retry_interval=60                    ; Retry registration every 60 seconds.
 max_retries=10                       ; Give up after 10 attempts (tune as needed).
 expiration=600                       ; Registration expiry in seconds.
 contact_user=${TWILIO_USERNAME}      ; User part for Contact header.
-client_uri=sip:${TWILIO_USERNAME}@${TWILIO_DOMAIN}
-server_uri=sip:${TWILIO_DOMAIN}
+client_uri=sips:${TWILIO_USERNAME}@${TWILIO_DOMAIN}
+server_uri=sips:${TWILIO_DOMAIN}:5061
+
+; ------------------------------
+; Groundwire softphone - extension 1001
+; ------------------------------
+; The following objects define a single authenticated SIP endpoint intended for
+; use with a softphone such as Groundwire. Credentials are supplied via the
+; GW_1001_PASSWORD environment variable so that no secrets are committed to
+; the repository.
+
+[gw-1001-auth]
+; Authentication credentials for extension 1001.
+type=auth
+auth_type=userpass
+username=1001
+password=${GW_1001_PASSWORD}
+
+[1001]
+; Address of record for extension 1001.
+; NOTE: We name the AOR "1001" (not gw-1001-aor) because some clients (and
+; certain Asterisk registration flows) expect the AOR to match the auth/user.
+type=aor
+max_contacts=1
+
+[gw-1001-endpoint]
+; Endpoint definition for extension 1001. Registered devices for this
+; extension land in the [internal] context in the dialplan, which we define in
+; extensions.conf. From there they can access internal services and, via the
+; include mechanism, the outbound Twilio routes.
+type=endpoint
+transport=twilio-transport-udp
+
+aors=1001
+auth=gw-1001-auth
+context=internal
+; Codec policy: prefer G.711 variants for simplicity.
+disallow=all
+allow=alaw,ulaw
+
+direct_media=no
+
+; NAT and signalling helpers – particularly useful when the softphone is on a
+; different network to Asterisk.
+rewrite_contact=yes
+rtp_symmetric=yes
+force_rport=yes
+
+[gw-1001-identify]
+; Map incoming requests to gw-1001-endpoint.
+; Without an identify rule, Asterisk may log "No matching endpoint found" for
+; REGISTERs coming from the LAN.
+type=identify
+endpoint=gw-1001-endpoint
+match=192.168.1.0/24
 
 ; End of pjsip.conf.template

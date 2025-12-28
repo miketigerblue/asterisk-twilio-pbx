@@ -10,8 +10,6 @@
 #     or env_file on the Pi (set up manually or via Ansible).
 #   - Configured with a restart policy suitable for a small always-on PBX.
 
-version: "3.9"
-
 services:
   pbx:
     # ------------------------------

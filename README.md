@@ -1,348 +1,348 @@
-# Asterisk Twilio PBX (Docker, Raspberry Pi, Ansible, GitHub Actions)
+# Asterisk ↔ Twilio PBX (Docker + Raspberry Pi + Ansible)
 
-This repository provides a fully containerised Asterisk PBX, configured to
-place outbound calls via Twilio SIP Trunking. It is designed to:
+This repo is a **containerised Asterisk PBX** that:
 
-- Run locally on macOS for development.
-- Build multi-architecture Docker images (amd64 + ARM) and push them to GHCR.
-- Deploy to a Raspberry Pi using both GitHub Actions (CI/CD) and an Ansible
-  playbook that you can also run manually from your Mac.
+- Lets **LAN softphones (e.g. Groundwire)** register to Asterisk.
+- Connects Asterisk to **Twilio Programmable Voice via a Twilio SIP Domain**.
+- Places outbound calls via Twilio using **TLS signalling + SRTP media (SDES)**.
+- Deploys to a Raspberry Pi with **one Ansible playbook** that:
+  - syncs the repo to the Pi
+  - builds the image locally
+  - starts the stack with Docker Compose
 
-All configuration is driven by environment variables so that Twilio credentials
-remain outside the image and the git repository.
+If you’re building a “real PBX” at home/in a lab, this setup is cool because it’s:
+
+- **Reproducible**: infra + config lives in git, secrets live in `.env`.
+- **Portable**: same container can run on a Mac (dev) or a Pi (prod-ish).
+- **Debuggable**: everything is plain files + Asterisk CLI commands.
+- **Secure by default** (for this class of project): TLS + SRTP, no unauthenticated endpoints.
+
+> For operational details and verification commands see **[RUNBOOK.md](./RUNBOOK.md)**.
+
+This repo also includes the ODIN/RIZZY voice-agent flow (Asterisk → Twilio `<Connect><Stream>` → `odin-realtime-bridge` → OpenAI Realtime).
+See **Voice agents (ODIN + RIZZY)** in **[RUNBOOK.md](./RUNBOOK.md)**.
+
+### odin-realtime-bridge (the cool bit)
+
+The WebSocket bridge that makes the voice agents work lives in [realtime-bridge/README.md](realtime-bridge/README.md).
+
+Why it’s neat:
+
+- Bridges Twilio Media Streams to OpenAI Realtime with end-to-end G.711 μ-law (`g711_ulaw`).
+- Handles streamed tool-call arguments safely (executes on `response.function_call_arguments.done`).
+- Implements paced outbound audio + backpressure trimming to keep barge-in usable.
+- Includes detailed Mermaid diagrams of the architecture and call flow.
 
 ---
 
-## High-level Architecture
+## Repository lifecycle (why this is neat)
 
-The following diagram summarises the main components and flows:
+### 1) Dev → Deploy → Runtime
 
-```text
-+-------------------+        +-------------------------+
-|   Mac (Dev Host)  |        |        GitHub          |
-|                   |        |  (Repo + Actions +     |
-| - Docker Desktop  | push   |   GHCR Container Reg)  |
-| - docker compose  +------->+-------------------------+
-| - Ansible (CLI)   |        |                         |
-+---------+---------+        |  build-and-push.yml     |
-          |                  |    - builds multi-arch  |
-          | ansible-playbook |    - pushes image       |
-          v                  |                         |
-+-------------------+        |  deploy-to-pi.yml       |
-|   Raspberry Pi    |<-------+    - runs Ansible       |
-|   (PBX Host)      |   pull |      playbook           |
-|                   |   from +-------------------------+
-| - Docker Engine   |   GHCR
-| - docker compose  |
-+---------+---------+
-          |
-          | SIP / RTP
-          v
-+-------------------+       +-------------------------+
-|   Twilio SIP      |<----->|  Bermuda / International|
-|   Trunking        |  PSTN |  Destinations           |
-+-------------------+       +-------------------------+
+```mermaid
+flowchart LR
+  subgraph Dev[Mac / Dev]
+    A["Edit config<br/>asterisk/*.conf + .env"] --> B["docker compose<br/>compose/docker-compose.dev.yml"]
+    B --> C["Asterisk container<br/>(local)"]
+  end
+
+  subgraph Deploy[Raspberry Pi / Deploy]
+    D["ansible-playbook<br/>ansible/playbook-pbx.yml"] --> E["Sync repo to /opt/asterisk-twilio-pbx"]
+    E --> F["docker compose build<br/>(on Pi)"]
+    F --> G["docker compose up -d<br/>asterisk-twilio-pbx"]
+  end
+
+  subgraph Twilio[Twilio Console]
+    H["SIP Domain<br/>mharris.sip.twilio.com"]
+    I["Credential List"]
+    J["Call Control Webhook<br/>Twilio Function"]
+  end
+
+  Dev --> Deploy
+  G <--> H
+  H --> I
+  H --> J
 ```
 
-- **Local development:** You run Asterisk in Docker on your Mac with
-  `docker compose -f compose/docker-compose.dev.yml up`, using host networking
-  and bind-mounted configuration.
-- **CI build:** GitHub Actions builds a multi-arch image and pushes it to
-  `ghcr.io/<OWNER>/asterisk-twilio-pbx:latest`.
-- **Deployment:** Ansible (run locally or via GitHub Actions) connects to your
-  Raspberry Pi, ensures Docker is available, copies a Compose file, and
-  launches the PBX container which registers to Twilio.
+### 2) Call flow (what happens when you dial)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant GW as Groundwire (LAN)
+  participant A as Asterisk (Pi / Docker)
+  participant TD as Twilio SIP Domain
+  participant FN as Twilio Function (Webhook)
+  participant PSTN as PSTN Destination
+
+  GW->>A: REGISTER (1001)
+  A-->>GW: 200 OK
+
+  GW->>A: INVITE 001441... (dialed)
+  A->>A: Dialplan rewrite 00... → +...
+
+  A->>TD: INVITE sip:+E164@SIP_DOMAIN (TLS)
+  TD-->>A: 407 Proxy Authentication Required
+  A->>TD: INVITE + Proxy-Authorization
+
+  TD->>FN: HTTP POST webhook (Call Control)
+  FN-->>TD: TwiML Dial/Number (+E164)
+  TD->>PSTN: Place call
+
+  PSTN-->>TD: Ring/Answer
+  TD-->>A: 180 Ringing / 200 OK (SRTP SDES)
+  A-->>GW: 180 Ringing / 200 OK (RTP)
+
+  GW->>A: RTP media (LAN)
+  A->>GW: RTP media (LAN)
+  A->>TD: SRTP media (Internet)
+  TD->>A: SRTP media (Internet)
+```
 
 ---
 
-## Repository Layout
+## Key concepts (current repo reality)
+
+### Twilio “SIP Domain” (not Elastic SIP Trunking)
+
+This repo is wired to **Twilio Voice → SIP Domains**.
+
+That means:
+
+- Twilio challenges outbound INVITEs with **407 Proxy Authentication**.
+- After auth succeeds, Twilio needs **Call Control Configuration** (Webhook/TwiML) to decide what to do.
+- Without call control, you’ll see **404 Not Found** after a successful 407.
+
+### TLS + SRTP are required
+
+Twilio required:
+
+- Secure SIP transport (**TLS**) → Asterisk uses `twilio-transport-tls`.
+- Secure media (**SRTP**) → Asterisk uses `media_encryption=sdes`.
+
+### NAT/audio correctness (why EXTERNAL_IP + LAN_IP exist)
+
+Asterisk runs inside Docker, so it *can* advertise Docker bridge IPs in SDP (e.g. `172.19.0.2`), which breaks audio.
+
+To keep audio working:
+
+- For the **Twilio leg**, Asterisk must advertise a routable **public** IP → `EXTERNAL_IP`.
+- For the **LAN phone leg**, Asterisk must advertise the Pi’s **LAN** IP → `LAN_IP`.
+
+---
+
+## Repository layout
 
 ```text
 asterisk-twilio-pbx/
   asterisk/
-    pjsip.conf.template   # Twilio PJSIP trunk definition, templated via env vars.
-    extensions.conf        # Dialplan (Bermuda + general international route).
-    modules.conf           # Modules to load / not load, focused on PJSIP and RTP.
+    pjsip.conf.template     # PJSIP transports/endpoints/registration (rendered via envsubst)
+    extensions.conf         # Dialplan (00... -> +..., caller ID policy)
+    rtp.conf                # RTP range (10000-10100)
+    modules.conf            # Module config
   docker/
-    Dockerfile             # Debian-slim based Asterisk image with envsubst support.
-    entrypoint.sh          # Validates env, renders pjsip.conf, starts Asterisk.
+    Dockerfile              # Debian bullseye + asterisk + openssl/ca-certificates
+    entrypoint.sh           # env validation + cert generation + envsubst
   compose/
-    docker-compose.dev.yml # Mac dev compose (host networking, bind-mounted configs).
-    docker-compose.pi.yml  # Pi deploy compose (GHCR image, explicit ports).
+    docker-compose.dev.yml  # dev compose (ports published, bind-mounted configs)
+    docker-compose.pi.yml   # reference compose (not used by Ansible path)
   ansible/
-    inventory.ini          # [pbx_pi] group and SSH connection settings.
-    playbook-pbx.yml       # Top-level play targeting pbx_pi.
-    group_vars/
-      pbx_pi.yml           # Project directory and GHCR image reference.
-    roles/
-      pbx_pi/
-        tasks/
-          main.yml         # Install Docker, copy compose file, run docker compose.
-        files/
-          docker-compose.pi.yml  # Compose file as copied to the Pi.
-        vars/
-          main.yml         # Minimal role defaults (packages, service names).
-  .env.example             # Sample env vars (Twilio credentials, domain).
-  .gitignore               # Ignore .env, logs, runtime dirs, local overrides.
-  README.md                # This documentation.
-  .github/
-    workflows/
-      build-and-push.yml   # Build + push multi-arch image to GHCR.
-      deploy-to-pi.yml     # Run Ansible playbook to deploy to Pi.
+    inventory.ini
+    playbook-pbx.yml
+    roles/pbx_pi/
+      tasks/main.yml        # sync repo to Pi, copy .env, build + up
+      templates/docker-compose.pi.yml.j2
+  .env.example
+  RUNBOOK.md
+  README.md
 ```
 
 ---
 
-## Getting Started (macOS development)
+## Quick Start (Raspberry Pi)
 
-### 1. Prerequisites
+### 1) Prereqs
 
-On your Mac you will need:
+- Raspberry Pi reachable via SSH
+- Docker installed (playbook handles this)
+- macOS machine running Ansible
 
-- Docker Desktop (or another Docker engine providing `docker` and
-  `docker compose`).
-- A Twilio account with a SIP trunk configured (username, password, domain).
+### 2) Configure inventory
 
-### 2. Configure environment variables
-
-1. Copy the example env file:
-
-   ```bash
-   cp .env.example .env
-   ```
-
-2. Edit `.env` and set:
-
-   - `TWILIO_USERNAME` – your Twilio SIP trunk username.
-   - `TWILIO_PASSWORD` – your Twilio SIP trunk password.
-   - `TWILIO_DOMAIN` – your Twilio SIP domain (e.g. `youraccount.sip.twilio.com`).
-
-The entrypoint script will refuse to start Asterisk if any of these are
-missing.
-
-### 3. Run the PBX locally
-
-From the project root:
-
-```bash
-docker compose -f compose/docker-compose.dev.yml up --build
-```
-
-This will:
-
-- Build the Asterisk image from `docker/Dockerfile`.
-- Start a container using host networking.
-- Bind-mount `./asterisk` into `/etc/asterisk` so you can tweak configuration
-  in real time.
-
-To tear down the dev stack:
-
-```bash
-docker compose -f compose/docker-compose.dev.yml down
-```
-
-### 4. Testing calls
-
-- Point a SIP softphone on your Mac at `localhost:5060` (or the host IP if
-  using another device on the LAN).
-- Use the `outbound` context and dial a Bermuda number matching the pattern
-  `001441XXXXXX` or another international number matching `00X.` to send calls
-  via Twilio.
-
-> **Note:** For proper caller ID, emergency calling, and compliance, you
-> should configure Twilio and Asterisk according to local regulations and your
-> use-case. This repo focuses on the containerisation and deployment aspects.
-
----
-
-## Ansible Deployment to Raspberry Pi
-
-The Ansible role `pbx_pi` automates preparing your Raspberry Pi and launching
-the PBX container using `docker compose`.
-
-### 1. Install Ansible on your Mac
-
-On macOS, a common approach is:
-
-```bash
-# Using Homebrew
-brew install ansible
-```
-
-Or via pip (inside a virtual environment if you prefer):
-
-```bash
-python3 -m pip install --user ansible
-```
-
-### 2. Configure the inventory
-
-Edit `ansible/inventory.ini` and replace the placeholders:
+Edit `ansible/inventory.ini`:
 
 ```ini
 [pbx_pi]
-pbxpi ansible_host=PBX_PI_HOST
+pbxpi ansible_host=<pi-hostname-or-ip>
 
 [pbx_pi:vars]
-ansible_user=PBX_PI_USER
+ansible_user=<ssh-user>
 ansible_ssh_private_key_file=~/.ssh/id_rsa
 ```
 
-- Replace `PBX_PI_HOST` with your Pi's IP or DNS name.
-- Replace `PBX_PI_USER` with your SSH username (e.g. `pi`).
-- Ensure `ansible_ssh_private_key_file` points at a private key that can
-  access the Pi without a password prompt.
-
-### 3. Review group variables
-
-In `ansible/group_vars/pbx_pi.yml` you can adjust:
-
-- `pbx_project_dir` – where the compose file and env file will live on the Pi
-  (default `/opt/asterisk-twilio-pbx`).
-- `pbx_image` – the GHCR image to deploy (update `<OWNER>` to your GitHub
-  username or organisation).
-
-Role-level defaults in `ansible/roles/pbx_pi/vars/main.yml` control package
-names and the Docker service name for Debian-based Pis.
-
-### 4. Run the playbook from your Mac
-
-From the project root:
+### 3) Configure `.env`
 
 ```bash
-ansible-playbook -i ansible/inventory.ini ansible/playbook-pbx.yml
+cp .env.example .env
+$EDITOR .env
 ```
 
-The play will:
+Required variables (see `.env.example` for full list):
 
-1. Install Docker, docker-compose plugin, and git on the Pi (if not present).
-2. Ensure the Docker service is enabled and running.
-3. Create the project directory (e.g. `/opt/asterisk-twilio-pbx`).
-4. Copy `docker-compose.pi.yml` into that directory.
-5. Create a placeholder `.env` file on the Pi (if one is not present).
-6. Use `docker compose` to pull the PBX image and bring the stack up.
+- `TWILIO_USERNAME`
+- `TWILIO_PASSWORD`
+- `TWILIO_DOMAIN` (your SIP Domain)
+- `TWILIO_PSTN_DOMAIN` (for SIP Domains, this can be the same as `TWILIO_DOMAIN`)
+- `TWILIO_CALLERID` (Twilio-accepted caller ID)
+- `EXTERNAL_IP` (public IP as seen by Twilio)
+- `LAN_IP` (Pi’s LAN IP)
+- `GW_1001_PASSWORD`
 
-After the first run, SSH to the Pi and edit
-`/opt/asterisk-twilio-pbx/.env` with your real Twilio credentials.
-Re-run the playbook any time you change the image or Compose file; it is
-idempotent and will only make changes when needed.
+### 4) Deploy
+
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/playbook-pbx.yml -K
+```
+
+What it does:
+
+- syncs this repo to `/opt/asterisk-twilio-pbx`
+- copies your local `.env` to the Pi
+- builds the Docker image on the Pi
+- runs the container and publishes SIP/RTP ports
 
 ---
 
-## GitHub Actions / CI/CD
+## Twilio setup (SIP Domain + Function webhook)
 
-Two workflows in `.github/workflows/` wire up CI and deployment.
+### 1) SIP Domain authentication
 
-### build-and-push.yml
+In **Voice → Manage → SIP domains → <your-domain>**:
 
-This workflow:
+- attach a **Credential List** containing your username/password
+- (optional) attach an **IP ACL** if you want to lock down which public IPs can originate calls
 
-1. Triggers on pushes to the `main` branch.
-2. Checks out the repository.
-3. Sets up QEMU for cross-architecture emulation.
-4. Sets up Docker Buildx.
-5. Logs in to GHCR using `${{ github.actor }}` and `GITHUB_TOKEN`.
-6. Builds the PBX image for `linux/amd64`, `linux/arm/v7`, and `linux/arm64`.
-7. Pushes the result as:
+### 2) Call Control Configuration (this is what makes calls work)
 
-   ```text
-   ghcr.io/${{ github.repository_owner }}/asterisk-twilio-pbx:latest
-   ```
+Still on the SIP Domain page, under **Call Control Configuration**:
 
-You may later add additional tags (e.g. SHA-based tags or semantic versions)
-if you need more sophisticated release management.
+- Set **A CALL COMES IN** to **Webhook**
+- Paste your Function URL (example):
+  `https://sip-dial-5846.twil.io/dial`
+- Save
 
-### deploy-to-pi.yml
+### 3) Twilio Function (example)
 
-This workflow:
+Create a Twilio Function at `/dial`:
 
-1. Can be triggered manually (`workflow_dispatch`) and also on pushes to
-   `main` (if you keep that trigger enabled).
-2. Checks out the repo.
-3. Sets up Python and installs Ansible.
-4. Writes the SSH private key from the `PI_SSH_PRIVATE_KEY` secret to
-   `~/.ssh/id_rsa` and configures SSH to skip host key prompts (you can
-   tighten this if desired).
-5. Optionally replaces `PBX_PI_HOST` and `PBX_PI_USER` placeholders in
-   `ansible/inventory.ini` with values from the `PI_HOST` and `PI_USER`
-   secrets.
-6. Runs `ansible-playbook -i ansible/inventory.ini ansible/playbook-pbx.yml`.
+```js
+exports.handler = function(context, event, callback) {
+  // event.To is often: "sip:+14155550100@yourdomain.sip.twilio.com"
+  const rawTo = (event.To || '').toString();
+  const match = rawTo.match(/\+\d+/);
+  const toNumber = match ? match[0] : null;
 
-### Required GitHub secrets
+  const twiml = new Twilio.twiml.VoiceResponse();
+  if (!toNumber) {
+    twiml.say('No destination number found');
+    return callback(null, twiml);
+  }
 
-Configure the following secrets in your GitHub repository settings:
+  // Set this to your verified/twilio-owned caller ID
+  const dial = twiml.dial({ callerId: '+15550199999' });
+  dial.number(toNumber);
 
-- `PI_HOST` – IP address or DNS name of your Raspberry Pi.
-- `PI_USER` – SSH username for the Pi.
-- `PI_SSH_PRIVATE_KEY` – Private SSH key with access to the Pi.
-
-Twilio credentials are *not* stored in GitHub secrets in this design; they are
-managed via `.env` files on your Mac and on the Pi. If you prefer to centralise
-secrets, you could extend the workflows and Ansible role to template `.env`
-files directly from GitHub secrets or Ansible Vault.
+  return callback(null, twiml);
+};
+```
 
 ---
 
-## Security Notes
+## Groundwire settings (extension 1001)
 
-This project is intended as a starting point. For production or internet-
-exposed use, consider at least the following:
-
-1. **Do not expose SIP/RTP openly:**
-   - Use firewall rules on your router and on the Pi to limit IP ranges that
-     can reach ports 5060/5061 and 10000–10100.
-   - Twilio publishes its SIP signalling and media IP ranges; you can
-     restrict inbound traffic accordingly where feasible.
-
-2. **Protect credentials:**
-   - Keep `.env` files out of git (already enforced via `.gitignore`).
-   - Rotate Twilio credentials if you suspect any compromise.
-   - Consider using Ansible Vault or an external secrets manager for
-     production deployments.
-
-3. **Consider TLS/SRTP:**
-   - The current configuration uses UDP/TCP SIP without TLS and plain RTP.
-   - For higher security, configure PJSIP TLS transports and SRTP (encrypted
-     media) once your environment supports it.
-
-4. **Limit Asterisk modules and features:**
-   - `modules.conf` is trimmed to disable many unused modules, but you should
-     review it whenever you add functionality to ensure only necessary
-     modules are loaded.
-
-5. **Monitor and log appropriately:**
-   - Centralise logs if this PBX will be used in anger.
-   - Consider fail2ban or equivalent on the Pi to help mitigate brute-force
-     SIP attacks.
+- **Server/Domain**: `<Pi LAN IP>` (example `192.168.1.188`)
+- **Port**: `5060`
+- **Transport**: UDP
+- **Username/Auth user**: `1001`
+- **Password**: value of `GW_1001_PASSWORD`
 
 ---
 
-## Git & GitHub Setup
+## Dialing
 
-This repository is already structured to be initialised as a git repository.
-After you have reviewed or modified the files, run the following from the
-project root to create your local git repo and make the initial commit:
+The dialplan rewrites:
 
-```bash
-git init
+- `00...` → `+...` (E.164)
 
-git add .
+Example:
 
-git commit -m "Initial containerised Asterisk/Twilio PBX with Ansible deployment"
-```
+- Dial Bermuda number `0014415994174` (Groundwire)
 
-Next, create a new repository on GitHub (for example
-`github.com/<USER>/asterisk-twilio-pbx`). Then add it as a remote and push the
-`main` branch:
+---
+
+## Verification
+
+On the Pi:
 
 ```bash
-git branch -M main
+# Twilio registration
+sudo docker exec asterisk-twilio-pbx asterisk -rx 'pjsip show registrations'
 
-git remote add origin git@github.com:<USER>/asterisk-twilio-pbx.git
+# Groundwire registration
+sudo docker exec asterisk-twilio-pbx asterisk -rx 'pjsip show aor 1001'
 
-git push -u origin main
+# Useful live debugging
+sudo docker exec asterisk-twilio-pbx asterisk -rx 'pjsip set logger on'
 ```
 
-Once pushed, GitHub Actions will start building and publishing the PBX image to
-GHCR, and you can use the `Deploy PBX to Raspberry Pi` workflow to roll out
-updates to your Pi.
+---
+
+## Voice agents (ODIN + RIZZY)
+
+This repo includes optional voice agents:
+
+- **ODIN** (SOC master): dial **6346**
+- **RIZZY ODIN** (dry-humour threat-intel analyst, nephew-friendly): dial **7499**
+
+Asterisk routes the call to Twilio, which then opens a Twilio **Media Stream** to a public WebSocket endpoint.
+
+Recommended deployment:
+- Deploy the bridge service at `realtime-bridge/` to Fly.io as `odin-realtime-bridge`.
+- Update your Twilio Function `/dial` to route `sip:6346@...` (ODIN) **and** `sip:7499@...` (RIZZY) to `<Connect><Stream>`.
+
+Quick links:
+- Bridge code: [`realtime-bridge/`](./realtime-bridge/)
+- Twilio Function template: [`realtime-bridge/twilio-function-odin-dial.js`](./realtime-bridge/twilio-function-odin-dial.js)
+
+High-level flow:
+
+```text
+Groundwire -> Asterisk (ext 6346 or 7499) -> Twilio SIP Domain -> Twilio Function (/dial)
+-> <Connect><Stream> -> wss://odin-realtime-bridge.fly.dev/twilio/stream
+-> odin-realtime-bridge selects persona (ODIN vs RIZZY) from signed token
+-> OpenAI Realtime
+```
+
+See RUNBOOK for step-by-step deployment and debugging.
+
+For tool-calling guardrails and bridge tool debug logging (`TOOL_CALL_LIMIT`, `TOOL_LOG_LEVEL`, `TOOL_EVENT_LOG_LEVEL`), see **[RUNBOOK.md](./RUNBOOK.md)**.
+
+## Troubleshooting (fast)
+
+| Symptom | Likely Cause | Fix |
+|--------|--------------|-----|
+| `488 Secure SIP transport required` | Twilio requires TLS | Ensure Twilio endpoint uses TLS transport + port 5061 |
+| `488 Secure media required` | Twilio requires SRTP | Set `media_encryption=sdes` |
+| `403 Forbidden` immediately (no 407) | Twilio policy/IP ACL | Fix SIP Domain auth (ACL/credentials) |
+| `404 Not found` after a successful 407 | SIP Domain has no call-control | Set Call Control Configuration webhook/TwiML |
+| Call connects but **no audio** | Bad SDP address (Docker IP leaked) | Set `EXTERNAL_IP` + `LAN_IP` and PJSIP `external_*_address` |
+
+For a deeper runbook, see **[RUNBOOK.md](./RUNBOOK.md)**.
+
+---
+
+## GitHub Actions / CI/CD (optional)
+
+This repo includes GitHub Actions workflows for building and deploying images.
+
+However, the current Ansible role deploy path builds locally on the Pi from the synced repo. If you want a “pull from GHCR” model instead, you can adapt the role/template back to using a published image.

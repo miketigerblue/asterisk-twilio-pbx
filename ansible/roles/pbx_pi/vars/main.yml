@@ -25,5 +25,8 @@ pbx_docker_service_name: "docker"
 # repositories).
 pbx_base_packages:
   - docker.io
-  - docker-compose-plugin
+  # Ubuntu 24.04 provides `docker compose` via docker-compose-v2
+  - docker-compose-v2
   - git
+  # Required for ansible.posix.synchronize
+  - rsync

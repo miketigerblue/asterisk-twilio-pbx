@@ -40,6 +40,7 @@ REQUIRED_VARS=(
   "TWILIO_USERNAME"  # Twilio SIP trunk username (often the same as account SID or trunk auth user).
   "TWILIO_PASSWORD"  # Twilio SIP trunk password/secret.
   "TWILIO_DOMAIN"    # Twilio SIP domain, e.g. youraccount.sip.twilio.com.
+  "GW_1001_PASSWORD" # Local SIP endpoint password for extension 1001.
 )
 
 missing=false
@@ -53,6 +54,26 @@ done
 if [ "${missing}" = "true" ]; then
   log_error "One or more required environment variables are missing; refusing to start Asterisk."
   exit 1
+fi
+
+# ------------------------------
+# Ensure TLS certificate exists (for SIP TLS transport)
+# ------------------------------
+TLS_CERT_DIR="/etc/asterisk/keys"
+TLS_CERT_PEM="${TLS_CERT_DIR}/asterisk.pem"
+
+mkdir -p "${TLS_CERT_DIR}"
+
+# Generate a self-signed cert if none is present.
+# This is sufficient for outbound TLS to Twilio unless you have enabled
+# mutual TLS (client certificate verification) on the Twilio trunk.
+if [ ! -f "${TLS_CERT_PEM}" ]; then
+  log_info "Generating self-signed TLS cert for PJSIP (TLS transport)..."
+  openssl req -x509 -newkey rsa:2048 -nodes \
+    -keyout "${TLS_CERT_PEM}" -out "${TLS_CERT_PEM}" \
+    -days 3650 -subj "/CN=asterisk" >/dev/null 2>&1
+  chown -R asterisk:asterisk "${TLS_CERT_DIR}"
+  chmod 600 "${TLS_CERT_PEM}"
 fi
 
 # ------------------------------
@@ -71,14 +92,15 @@ if [ ! -f "${PJSIP_TEMPLATE}" ]; then
 fi
 
 log_info "Rendering PJSIP configuration from template..."
-# We explicitly list the variables we expect to substitute for clarity and
-# to avoid surprising substitutions of unrelated variables.
-TWILIO_USERNAME="${TWILIO_USERNAME}" \
-TWILIO_PASSWORD="${TWILIO_PASSWORD}" \
-TWILIO_DOMAIN="${TWILIO_DOMAIN}" \
-  envsubst '${TWILIO_USERNAME} ${TWILIO_PASSWORD} ${TWILIO_DOMAIN}' \
-    < "${PJSIP_TEMPLATE}" \
-    > "${PJSIP_RENDERED}"
+# Use envsubst to substitute all environment variables into the template. This
+# ensures that both the Twilio credentials (TWILIO_*) and any additional
+# endpoint secrets such as GW_1001_PASSWORD are rendered correctly without us
+# having to maintain a hard-coded list of variable names here.
+#
+# Security note: this only affects the contents of pjsip.conf inside the
+# container; secrets remain provided via environment variables and are not
+# committed to the image or repository.
+envsubst < "${PJSIP_TEMPLATE}" > "${PJSIP_RENDERED}"
 
 # Ensure the rendered configuration is owned by the asterisk user for
 # consistency, particularly when running with a bind-mounted /etc/asterisk in

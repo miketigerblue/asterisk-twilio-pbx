@@ -9,8 +9,6 @@
 #     the container, so you can edit configuration files live.
 #   - Loads Twilio credentials from a local .env file (not committed to git).
 
-version: "3.9"
-
 services:
   pbx:
     # ------------------------------
@@ -43,20 +41,29 @@ services:
     # container is running. The entrypoint will re-render pjsip.conf on each
     # container start, so restart the container after changing credentials or
     # template fields.
+    # IMPORTANT: Do not bind-mount the entire /etc/asterisk directory.
+    # The container entrypoint renders /etc/asterisk/pjsip.conf at startup;
+    # if /etc/asterisk is bind-mounted, that rendered file (including secrets)
+    # is written back into the host workspace.
+    #
+    # Instead, mount only the specific config sources you want to edit.
     volumes:
-      - ../asterisk:/etc/asterisk:rw
+      - ../asterisk/pjsip.conf.template:/etc/asterisk/pjsip.conf.template:rw
+      - ../asterisk/extensions.conf:/etc/asterisk/extensions.conf:rw
+      - ../asterisk/modules.conf:/etc/asterisk/modules.conf:rw
 
     # ------------------------------
     # Networking
     # ------------------------------
-    # Host networking is used on macOS to simplify SIP and RTP handling. This
-    # exposes Asterisk directly on the host's network stack, meaning that
-    # SIP clients on the same host (or on the LAN, subject to firewall
-    # rules) can talk to it without explicit port mappings.
-    #
-    # WARNING: Host networking should be used with care. Only run this on a
-    # trusted development machine and with sensible firewalling.
-    network_mode: "host"
+    # On macOS Docker runs containers inside a Linux VM, so `network_mode: host`
+    # does not expose services directly on the Mac's network stack. Instead we
+    # explicitly publish the SIP and RTP ports we need so that softphones on
+    # the Mac (or LAN) can connect to Asterisk via localhost or the Mac's IP.
+    ports:
+      - "5060:5060/udp"           # SIP UDP signalling.
+      - "5060:5060/tcp"           # SIP TCP (kept for completeness).
+      - "5061:5061/tcp"           # Reserved for TLS SIP in future.
+      - "10000-10100:10000-10100/udp"  # RTP media range.
 
     # ------------------------------
     # Restart policy

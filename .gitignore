@@ -11,6 +11,9 @@
 .env
 .env.*
 
+# Rendered Asterisk configs (can contain secrets)
+asterisk/pjsip.conf
+
 # Logs
 *.log
 logs/
@@ -24,6 +27,11 @@ log/
 
 # Docker-related artefacts
 *.pid
+
+# Node / realtime-bridge
+realtime-bridge/node_modules/
+realtime-bridge/npm-debug.log*
+realtime-bridge/fly.toml
 
 # macOS cruft
 .DS_Store

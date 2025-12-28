@@ -6,9 +6,12 @@
 # - Support both local development (with bind-mounted configuration) and production/PI usage (with configs baked in).
 # - Serve as the build context for multi-architecture images (amd64 + arm variants) via Docker Buildx / GitHub Actions.
 
-# We use the official Debian slim image as requested, which provides a reasonable
-# balance between size and compatibility with Asterisk packages.
-FROM debian:stable-slim
+# We use a specific Debian slim release (bullseye) rather than the moving
+# `stable` tag. Asterisk has been removed from newer Debian releases, but
+# Debian 11 (bullseye) still ships the `asterisk` packages we rely on.
+# Pinning to bullseye-slim ensures `apt-get install asterisk` works reliably
+# across architectures while keeping the image reasonably up to date.
+FROM debian:bullseye-slim
 
 # ------------------------------
 # Core system preparation
@@ -39,7 +42,9 @@ RUN set -eux; \
         nano \
         less \
         procps \
-        gettext-base; \
+        gettext-base \
+        ca-certificates \
+        openssl; \
     # Remove apt lists to reduce image size.
     rm -rf /var/lib/apt/lists/*
 
@@ -67,6 +72,7 @@ RUN set -eux; \
 COPY --chown=asterisk:asterisk asterisk/pjsip.conf.template /etc/asterisk/pjsip.conf.template
 COPY --chown=asterisk:asterisk asterisk/extensions.conf        /etc/asterisk/extensions.conf
 COPY --chown=asterisk:asterisk asterisk/modules.conf           /etc/asterisk/modules.conf
+COPY --chown=asterisk:asterisk asterisk/rtp.conf               /etc/asterisk/rtp.conf
 
 # ------------------------------
 # Copy entrypoint script

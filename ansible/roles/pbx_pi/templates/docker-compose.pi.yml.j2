@@ -1,0 +1,24 @@
+# docker-compose.pi.yml - Deployment Compose file for Raspberry Pi (rendered by Ansible)
+# -------------------------------------------------------------------------------
+# This Compose file is rendered from a Jinja template so Ansible can inject the
+# image reference (pbx_image) without leaving placeholders in the deployed file.
+
+services:
+  pbx:
+    # Build locally on the Pi from the project files copied by Ansible.
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+
+    container_name: asterisk-twilio-pbx
+
+    env_file:
+      - .env
+
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+      - "5061:5061/tcp"
+      - "10000-10100:10000-10100/udp"
+
+    restart: unless-stopped
