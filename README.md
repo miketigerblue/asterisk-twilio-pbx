@@ -1,3 +1,5 @@
+![ODIN realtime voice architecture](docs/diagrams/odin-realtime-architecture.png)
+> Editable source: `docs/diagrams/odin-realtime-architecture.drawio`
 
 ## How to read this repo (recommended)
 
@@ -488,5 +490,3 @@ This repo includes GitHub Actions workflows for building and deploying images.
 However, the current Ansible role deploy path builds locally on the Pi from the synced repo. If you want a “pull from GHCR” model instead, you can adapt the role/template back to using a published image.
 
 
-![ODIN realtime voice architecture](docs/diagrams/odin-realtime-architecture.png)
-> Editable source: `docs/diagrams/odin-realtime-architecture.drawio`
