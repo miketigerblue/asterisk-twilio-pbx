@@ -1,41 +1,79 @@
-# Asterisk ↔ Twilio PBX (Docker + Raspberry Pi + Ansible)
 
-This repo is a **containerised Asterisk PBX** that:
+## How to read this repo (recommended)
 
-- Lets **LAN softphones (e.g. Groundwire)** register to Asterisk.
-- Connects Asterisk to **Twilio Programmable Voice via a Twilio SIP Domain**.
-- Places outbound calls via Twilio using **TLS signalling + SRTP media (SDES)**.
-- Deploys to a Raspberry Pi with **one Ansible playbook** that:
-  - syncs the repo to the Pi
-  - builds the image locally
-  - starts the stack with Docker Compose
+This repository is documented at multiple levels because it touches
+real-time voice, SIP, and production constraints.
 
-If you’re building a “real PBX” at home/in a lab, this setup is cool because it’s:
+If you’re short on time:
 
-- **Reproducible**: infra + config lives in git, secrets live in `.env`.
-- **Portable**: same container can run on a Mac (dev) or a Pi (prod-ish).
-- **Debuggable**: everything is plain files + Asterisk CLI commands.
-- **Secure by default** (for this class of project): TLS + SRTP, no unauthenticated endpoints.
+- **Live ODIN call behaviour (annotated)**  
+  → `docs/realtime-flow.md`
 
-> For operational details and verification commands see **[RUNBOOK.md](./RUNBOOK.md)**.
+- **PBX + Twilio operational details**  
+  → `RUNBOOK.md`
 
-This repo also includes the ODIN/RIZZY voice-agent flow (Asterisk → Twilio `<Connect><Stream>` → `odin-realtime-bridge` → OpenAI Realtime).
-See **Voice agents (ODIN + RIZZY)** in **[RUNBOOK.md](./RUNBOOK.md)**.
+- **Realtime bridge internals (state machine, buffering, barge-in, tools)**  
+  → `realtime-bridge/README.md`
 
-### odin-realtime-bridge (the cool bit)
+The remainder of this README provides a guided architectural overview
+and reference.
 
-The WebSocket bridge that makes the voice agents work lives in [realtime-bridge/README.md](realtime-bridge/README.md).
 
-Why it’s neat:
+# Asterisk ↔ Twilio PBX (SIP) → Realtime Voice Agents (Twilio Media Streams → OpenAI Realtime)
 
-- Bridges Twilio Media Streams to OpenAI Realtime with end-to-end G.711 μ-law (`g711_ulaw`).
-- Handles streamed tool-call arguments safely (executes on `response.function_call_arguments.done`).
-- Implements paced outbound audio + backpressure trimming to keep barge-in usable.
-- Includes detailed Mermaid diagrams of the architecture and call flow.
+This repo is a **portfolio-grade “old-school SIP” bridge** that combines:
+
+- **Asterisk (PJSIP) PBX** in Docker
+- **Twilio SIP Domains** (TLS signalling + SRTP media)
+- **Twilio Call Control (Functions/TwiML)**
+- A real-time, agentic voice layer: **Twilio Media Streams → `odin-realtime-bridge` (Fly.io) → OpenAI Realtime**
+
+It’s designed to show how a classic PBX can become a **natural language interface** to a modern “sensor fusion” threat-intel stack.
+
+## Why this project exists (portfolio narrative)
+
+Most “AI demos” never touch real networks, real protocols, or real operational constraints.
+
+This project is intentionally the opposite: it’s a **network services** build that starts with a real PBX and ends with a real-time, tool-using voice agent.
+
+The goal is to demonstrate:
+
+- **People**: a human can ask natural questions over a phone call.
+- **Process**: a repeatable daily/rolling threat-intel workflow (SITREP + drill-down).
+- **Technology**: SIP/TLS/SRTP + Twilio Call Control + Media Streams + OpenAI Realtime + tool-backed data.
+
+In other words: “old-school SIP” as a stable edge interface → “agentic” analysis and action on the back end.
+
+> For operational details, troubleshooting, and verification commands see **[RUNBOOK.md](./RUNBOOK.md)**.
 
 ---
 
-## Repository lifecycle (why this is neat)
+## What you can do with it (3 call modes)
+
+### 1) LAN phone → PSTN (via Twilio)
+Dial from a local SIP phone (Yealink, Groundwire, etc.):
+
+- Dial `00...` and Asterisk rewrites to `+...` (E.164)
+- Asterisk sends SIP over **TLS** to Twilio
+- Twilio uses your **Call Control webhook** to decide what to do
+- Twilio places the PSTN call
+
+### 2) Dial **6346** → ODIN (SOC master voice agent)
+Call flow:
+
+`SIP phone → Asterisk → Twilio SIP Domain → Twilio Function (/dial) → <Connect><Stream> → odin-realtime-bridge → OpenAI Realtime`
+
+ODIN opens with a short cyber SITREP (default past 24h) then lets you drill into:
+- “Headlines”
+- Vendor/campaign search
+- CVE/KEV lookups
+
+### 3) Dial **7499** → RIZZY ODIN (nephew-friendly analyst persona)
+Same flow as ODIN, with a different prompt/persona selected by a signed token.
+
+---
+
+## Repository lifecycle: Dev → Deploy → Runtime
 
 ### 1) Dev → Deploy → Runtime
 
@@ -53,7 +91,7 @@ flowchart LR
   end
 
   subgraph Twilio[Twilio Console]
-    H["SIP Domain<br/>mharris.sip.twilio.com"]
+    H["SIP Domain<br/><your-sip-domain>.sip.twilio.com"]
     I["Credential List"]
     J["Call Control Webhook<br/>Twilio Function"]
   end
@@ -62,20 +100,100 @@ flowchart LR
   G <--> H
   H --> I
   H --> J
+
 ```
+
+---
+
+## Architecture overview (two planes)
+
+### A) Voice/SIP plane (real-time)
+- LAN handset registers to Asterisk (PJSIP) (e.g. extension 1001)
+- Asterisk places outbound calls to Twilio SIP Domain (TLS + SRTP SDES)
+- Twilio Call Control (Function) decides:
+  - PSTN `<Dial><Number>` **or**
+  - Agent `<Connect><Stream>` (Twilio Media Streams)
+
+### B) Threat-intel data plane (near-real-time)
+The voice agent’s “brain” is intentionally wired to a simple API surface:
+
+- **OSINT ingestion** (RSS/Atom “bulk watching”)
+- **Enrichment**: NVD / CISA KEV / EPSS + light analysis
+- **Clustering** into “what matters” + short summaries
+- A periodic **SITREP** (e.g. “past 24h” and a daily 07:15 run)
+- Exposed via **PostgREST** so the bridge can fetch context quickly
+- Optional semantic drill-down via **Cyberscape Nexus** (semantic search service)
+
+This separation keeps the call path fast: the bridge **serves cached SITREP context** during calls and refreshes in the background.
+
+---
+
+## MVP data model (what’s in scope)
+
+The MVP focuses on OSINT + L1 cyber analysis as a data product.
+
+Inputs:
+- RSS/Atom sources (bulk ingestion)
+- NVD (CVE), CISA KEV, EPSS (enrichment)
+
+Processing:
+- Normalize + enrich items (severity, confidence, CVE linkage)
+- Cluster “related” items into themes
+- Produce rollups:
+  - a rolling **past-24h SITREP** (default call window)
+  - a daily scheduled report (e.g. **07:15**) for “what changed since yesterday”
+
+Serving:
+- PostgREST exposes a minimal read API for:
+  - latest SITREP text
+  - recent entries
+  - CVE/KEV/EPSS lookups
+- The voice agent uses this cached context at call start, then uses tools for drill-down.
+
+---
+
+## How the SIP → Twilio → Agent handoff works
+
+### Outbound call signalling (Twilio SIP Domain)
+- Asterisk registers to Twilio (PJSIP `registration`)
+- Outbound INVITE to Twilio is challenged with **407**
+- Asterisk resends with digest auth (`twilio-auth`)
+- Twilio then invokes the **Call Control webhook** for routing
+
+### Agent routing (TwiML)
+When you dial `6346` or `7499`:
+- Your Twilio Function returns TwiML `<Connect><Stream>` to the Fly.io bridge.
+- The Function creates a short-lived **HMAC-signed token** and passes it:
+  - in the Stream URL query string **and**
+  - redundantly in `start.customParameters` via `<Stream><Parameter>`.
+
+This redundancy is deliberate: Twilio has been observed to occasionally strip/mangle querystrings during the WebSocket upgrade.
+
+### Realtime audio and tool calls (bridge)
+The bridge (`realtime-bridge/src/server.js`) is built for “voice UX” realities:
+
+- End-to-end audio is **G.711 μ-law** (`g711_ulaw`) for simplicity and interoperability.
+- Assistant audio is **paced** (20ms frames) to preserve barge-in.
+- Backpressure is handled by trimming oldest queued audio (bounded latency).
+- Tool calls execute only after `response.function_call_arguments.done` to avoid empty/partial argument execution.
+
+See: **[`realtime-bridge/README.md`](./realtime-bridge/README.md)** for diagrams and env vars.
+
+
+---
 
 ### 2) Call flow (what happens when you dial)
 
 ```mermaid
 sequenceDiagram
   autonumber
-  participant GW as Groundwire (LAN)
+  participant GW as LAN Phone (SIP)
   participant A as Asterisk (Pi / Docker)
   participant TD as Twilio SIP Domain
   participant FN as Twilio Function (Webhook)
   participant PSTN as PSTN Destination
 
-  GW->>A: REGISTER (1001)
+  GW->>A: REGISTER (ext 1001)
   A-->>GW: 200 OK
 
   GW->>A: INVITE 001441... (dialed)
@@ -93,8 +211,8 @@ sequenceDiagram
   TD-->>A: 180 Ringing / 200 OK (SRTP SDES)
   A-->>GW: 180 Ringing / 200 OK (RTP)
 
-  GW->>A: RTP media (LAN)
-  A->>GW: RTP media (LAN)
+  GW->>A: RTP media
+  A->>GW: RTP media
   A->>TD: SRTP media (Internet)
   TD->>A: SRTP media (Internet)
 ```
@@ -155,9 +273,31 @@ asterisk-twilio-pbx/
   .env.example
   RUNBOOK.md
   README.md
+
 ```
 
 ---
+
+## Security & ops notes (read this before exposing anything to the Internet)
+
+This is a lab/portfolio PBX. Treat it like a production SIP service anyway.
+
+### Ports
+- **5060/udp**: LAN SIP registrations (keep LAN-only; do not expose publicly)
+- **5061/tcp**: SIP TLS to Twilio (restrict inbound; only Twilio IP ranges if you enable inbound calling)
+- **10000–10100/udp**: RTP/SRTP media (same story: restrict as much as possible)
+
+### Secrets
+- PBX secrets live in **`.env`** (never commit)
+- Twilio Function has its own secrets:
+  - `ODIN_HMAC_SECRET` must match Fly secret `TWILIO_STREAM_HMAC_SECRET`
+
+### Asterisk hardening
+- `modules.conf` currently uses `autoload=yes` for simplicity. For a hardened install, reintroduce a minimal `noload = ...` list once stable.
+- The Twilio endpoint currently lands in `context=outbound`. For inbound Twilio calls, create a dedicated `from-twilio` context.
+
+---
+
 
 ## Quick Start (Raspberry Pi)
 
@@ -258,13 +398,16 @@ exports.handler = function(context, event, callback) {
 
 ---
 
-## Groundwire settings (extension 1001)
+## LAN phone settings (extension 1001)
 
-- **Server/Domain**: `<Pi LAN IP>` (example `192.168.1.188`)
+For a SIP handset/base on your LAN (e.g. **Yealink W73P/W70B**):
+
+- **Server/Registrar**: `<Pi LAN IP>`
 - **Port**: `5060`
 - **Transport**: UDP
-- **Username/Auth user**: `1001`
+- **User / Auth ID**: `1001`
 - **Password**: value of `GW_1001_PASSWORD`
+- **Codecs**: allow **PCMA/PCMU** (G.711 A-law / μ-law)
 
 ---
 
@@ -274,9 +417,6 @@ The dialplan rewrites:
 
 - `00...` → `+...` (E.164)
 
-Example:
-
-- Dial Bermuda number `0014415994174` (Groundwire)
 
 ---
 
@@ -288,7 +428,7 @@ On the Pi:
 # Twilio registration
 sudo docker exec asterisk-twilio-pbx asterisk -rx 'pjsip show registrations'
 
-# Groundwire registration
+# Extension registration (1001)
 sudo docker exec asterisk-twilio-pbx asterisk -rx 'pjsip show aor 1001'
 
 # Useful live debugging
@@ -302,7 +442,7 @@ sudo docker exec asterisk-twilio-pbx asterisk -rx 'pjsip set logger on'
 This repo includes optional voice agents:
 
 - **ODIN** (SOC master): dial **6346**
-- **RIZZY ODIN** (dry-humour threat-intel analyst, nephew-friendly): dial **7499**
+- **RIZZY ODIN** (dry-humour threat-intel analyst): dial **7499**
 
 Asterisk routes the call to Twilio, which then opens a Twilio **Media Stream** to a public WebSocket endpoint.
 
@@ -317,7 +457,7 @@ Quick links:
 High-level flow:
 
 ```text
-Groundwire -> Asterisk (ext 6346 or 7499) -> Twilio SIP Domain -> Twilio Function (/dial)
+LAN phone -> Asterisk (ext 6346 or 7499) -> Twilio SIP Domain -> Twilio Function (/dial)
 -> <Connect><Stream> -> wss://odin-realtime-bridge.fly.dev/twilio/stream
 -> odin-realtime-bridge selects persona (ODIN vs RIZZY) from signed token
 -> OpenAI Realtime
@@ -346,3 +486,7 @@ For a deeper runbook, see **[RUNBOOK.md](./RUNBOOK.md)**.
 This repo includes GitHub Actions workflows for building and deploying images.
 
 However, the current Ansible role deploy path builds locally on the Pi from the synced repo. If you want a “pull from GHCR” model instead, you can adapt the role/template back to using a published image.
+
+
+![ODIN realtime voice architecture](docs/diagrams/odin-realtime-architecture.png)
+> Editable source: `docs/diagrams/odin-realtime-architecture.drawio`

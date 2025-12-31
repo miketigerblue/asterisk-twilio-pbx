@@ -1,3 +1,7 @@
+> Audience: operators and debuggers.  
+> For an example of how ODIN behaves during a live call, see `docs/realtime-flow.md`.
+
+
 # PBX Runbook (Groundwire ↔ Asterisk ↔ Twilio)
 
 This repo runs Asterisk (PJSIP) in Docker and connects:
@@ -95,6 +99,107 @@ docker exec "$PBX_CONTAINER" asterisk -rx 'pjsip show transport twilio-transport
 
 # Groundwire registration
 docker exec "$PBX_CONTAINER" asterisk -rx 'pjsip show aor 1001'
+docker exec "$PBX_CONTAINER" asterisk -rx 'pjsip show aor 1002'
+```
+
+---
+
+## Capturing SIP signalling for the ~9-minute call drop
+
+The consistent “drops at ~9 minutes” symptom is very often explained by one of:
+
+- **Session-Timers** expiring (look for `Session-Expires` / `Min-SE` and a mid-call `re-INVITE`/`UPDATE` refresh that fails)
+- A clean **BYE** being sent by one side (we need to prove who sends it and why)
+
+### What we learned from the first capture
+
+In `asterisk-sip-trace.log` for CallSid `CA1c2825ad03ef4dfc38daaea6a36608b2`:
+
+- Twilio negotiated `Session-Expires: 1800;refresher=uac` (Asterisk is the refresher).
+- SIP OPTIONS keepalives were flowing normally (`200 OK`).
+- **Twilio sent the BYE** (clean hangup), and Asterisk relayed it to Groundwire.
+
+That points away from “Asterisk crashed” and towards the **upstream PSTN/carrier leg** being cleared and Twilio propagating it.
+
+### Where logs are (host vs container)
+
+- The **host** may not have `/var/log/asterisk` (that’s normal when you don’t mount it).
+- The **container** does: `/var/log/asterisk/...`.
+- Anything printed to the Asterisk console (including `pjsip set logger on`) can be captured via **`docker logs`**.
+
+### Step 1: Turn on verbose SIP logging (in the container)
+
+Set a container name for your environment:
+
+```bash
+PBX_CONTAINER=asterisk-twilio-pbx
+```
+
+Enable logging (non-interactive):
+
+```bash
+# Increase console verbosity so SIP trace lines actually appear
+docker exec "$PBX_CONTAINER" asterisk -rx "core set verbose 10"
+docker exec "$PBX_CONTAINER" asterisk -rx "core set debug 5"
+
+# Log SIP messages (requests/responses + headers) to the Asterisk console
+docker exec "$PBX_CONTAINER" asterisk -rx "pjsip set logger on"
+
+# Optional: keep a short history buffer for quick inspection
+docker exec "$PBX_CONTAINER" asterisk -rx "pjsip set history on"
+```
+
+### Step 2: Start capturing logs from the container
+
+On the **Pi host**, run:
+
+```bash
+# Capture the container console output to a file while reproducing the issue
+docker logs -f "$PBX_CONTAINER" > /tmp/asterisk-sip-trace.log
+```
+
+Leave that running, then place the Bermuda call and wait for the ~9-minute drop.
+
+### Step 3: After the drop, extract the important lines
+
+Stop the `docker logs -f ...` command (Ctrl+C) and then run:
+
+```bash
+grep -nE "BYE|Session-Expires|Min-SE|re-INVITE|INVITE|UPDATE|422|408|481|Reason:" /tmp/asterisk-sip-trace.log | tail -n 250
+```
+
+What we specifically need from the trace:
+
+1) The **BYE** (who sent it: Twilio → Asterisk, or Asterisk → Twilio)
+2) Any **Session-Timers negotiation** near call setup:
+   - `Supported: timer` / `Session-Expires:` / `Min-SE:` / `refresher=...`
+3) Any mid-call **refresh attempt** around ~540–600 seconds (`re-INVITE` or `UPDATE`)
+4) If present, a `Reason:` header (often indicates “session timer expired”, “normal clearing”, etc.)
+
+### Mitigation to try (does not require Twilio changes): RTP keepalive
+
+Even with healthy SIP/TLS keepalives, some networks tear down media paths if they consider them idle.
+We enable RTP keepalives towards Twilio in `pjsip.conf.template` on `[twilio-endpoint]`:
+
+```ini
+rtp_keepalive=20
+```
+
+This is a low-risk change that can prevent deterministic mid-call clears caused by media-path idleness.
+
+### Step 4: Turn logging back off
+
+```bash
+docker exec "$PBX_CONTAINER" asterisk -rx "pjsip set logger off"
+docker exec "$PBX_CONTAINER" asterisk -rx "pjsip set history off"
+```
+
+### Optional: check file logs inside the container
+
+```bash
+docker exec "$PBX_CONTAINER" sh -lc 'ls -la /var/log/asterisk || true'
+docker exec "$PBX_CONTAINER" sh -lc 'tail -n 200 /var/log/asterisk/messages 2>/dev/null || true'
+docker exec "$PBX_CONTAINER" sh -lc 'tail -n 200 /var/log/asterisk/full 2>/dev/null || true'
 ```
 
 ---

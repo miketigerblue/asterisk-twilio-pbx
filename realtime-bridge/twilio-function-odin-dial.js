@@ -15,7 +15,7 @@
  *  - ODIN_STREAM_URL: e.g. wss://odin-realtime-bridge.fly.dev/twilio/stream
  *  - ODIN_HMAC_SECRET: shared secret used to sign stream tokens
  *  - ODIN_TOKEN_TTL_SECONDS: optional, default 300
- *  - TWILIO_CALLERID: optional; your Twilio/verified caller ID in E.164
+ *  - TWILIO_CALLERID: your Twilio/verified caller ID in E.164 (recommended/required for SIP-originated PSTN dialing)
  */
 
 const crypto = require('crypto');
@@ -40,6 +40,12 @@ function extractE164(to) {
   const rawTo = (to || '').toString();
   const match = rawTo.match(/\+\d+/);
   return match ? match[0] : null;
+}
+
+function extractCallerIdE164(from, defaultCallerId) {
+  // For SIP-originated calls, event.From is often a SIP URI (not +E164) which can
+  // cause Twilio error 13214 if used as callerId. We only accept a +E164.
+  return extractE164(defaultCallerId) || extractE164(from);
 }
 
 function getAgent(to) {
@@ -99,8 +105,17 @@ exports.handler = function (context, event, callback) {
     return callback(null, twiml);
   }
 
-  const callerId = (context.TWILIO_CALLERID || '').toString();
-  const dial = twiml.dial(callerId ? { callerId } : undefined);
+  const callerId = extractCallerIdE164(event.From, context.TWILIO_CALLERID);
+  if (!callerId) {
+    // Twilio requires a valid callerId for SIP/TwilioClient-originated calls when using <Dial>.
+    // Without this, you can hit warning/error 13214.
+    twiml.say('Caller ID is not configured. Please set TWILIO_CALLERID.');
+    return callback(null, twiml);
+  }
+  // Use an action callback so we can branch on DialCallStatus (busy/no-answer/failed/etc)
+  // and return different TwiML per outcome.
+  // NOTE: Avoid object spread here for maximum compatibility with older runtimes.
+  const dial = twiml.dial({ callerId, action: '/dial-result', method: 'POST' });
   dial.number(toNumber);
 
   return callback(null, twiml);

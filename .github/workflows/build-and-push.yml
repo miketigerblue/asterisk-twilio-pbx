@@ -7,6 +7,7 @@
 name: Build and push PBX image
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -62,5 +63,6 @@ jobs:
           platforms: linux/amd64,linux/arm/v7,linux/arm64
           tags: |
             ghcr.io/${{ github.repository_owner }}/asterisk-twilio-pbx:latest
+            ghcr.io/${{ github.repository_owner }}/asterisk-twilio-pbx:${{ github.sha }}
           # Optionally, build arguments or labels could be added here to
           # record build-time metadata (such as git SHA, build date, etc.).

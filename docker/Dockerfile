@@ -48,6 +48,12 @@ RUN set -eux; \
     # Remove apt lists to reduce image size.
     rm -rf /var/lib/apt/lists/*
 
+# Some Debian Asterisk packages expect a default MOH directory. In container
+# deployments we don't use MOH, but creating the directory avoids noisy startup
+# warnings like: "Error opening directory - /usr/share/asterisk/moh".
+RUN set -eux; \
+    mkdir -p /usr/share/asterisk/moh
+
 # ------------------------------
 # Asterisk user and permissions
 # ------------------------------
@@ -73,6 +79,7 @@ COPY --chown=asterisk:asterisk asterisk/pjsip.conf.template /etc/asterisk/pjsip.
 COPY --chown=asterisk:asterisk asterisk/extensions.conf        /etc/asterisk/extensions.conf
 COPY --chown=asterisk:asterisk asterisk/modules.conf           /etc/asterisk/modules.conf
 COPY --chown=asterisk:asterisk asterisk/rtp.conf               /etc/asterisk/rtp.conf
+COPY --chown=asterisk:asterisk asterisk/confbridge.conf  /etc/asterisk/confbridge.conf
 
 # ------------------------------
 # Copy entrypoint script

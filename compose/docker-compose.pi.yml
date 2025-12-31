@@ -15,9 +15,8 @@ services:
     # ------------------------------
     # Image reference
     # ------------------------------
-    # NOTE: Replace <OWNER> with your GitHub username or organisation name.
-    # The build-and-push GitHub Action tags images in this format.
-    image: ghcr.io/<OWNER>/asterisk-twilio-pbx:latest
+    # Image published by CI to GHCR for this repo.
+    image: ghcr.io/miketigerblue/asterisk-twilio-pbx:latest
 
     container_name: asterisk-twilio-pbx
 

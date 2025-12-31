@@ -226,3 +226,34 @@ Revert to normal logging:
 npm install
 OPENAI_API_KEY=... TWILIO_STREAM_HMAC_SECRET=... npm run dev
 ```
+
+---
+
+## Twilio call-control Functions
+
+This repo includes example Twilio Functions for the SIP Domain “Call comes in” webhook.
+
+### `/dial` (SIP Domain inbound)
+
+File: `twilio-function-odin-dial.js`
+
+- **ODIN / RIZZY**: for `sip:6346@...` and `sip:7499@...` it returns TwiML:
+  - `<Connect><Stream>` to `ODIN_STREAM_URL` (with HMAC token)
+- **PSTN**: for `sip:+E164@...` it returns TwiML:
+  - `<Dial action="/dial-result" method="POST"><Number>+E164</Number></Dial>`
+
+### `/dial-result` (PSTN outcome handling)
+
+File: `twilio-function-dial-result.js`
+
+This is the `<Dial action>` handler. It branches on `DialCallStatus` and returns per-status TwiML.
+
+Possible `DialCallStatus` values:
+
+- `completed`
+- `busy`
+- `no-answer`
+- `failed`
+- `canceled`
+
+If you want different behavior (e.g. retries, voicemail, or forwarding), change the TwiML in `/dial-result`.

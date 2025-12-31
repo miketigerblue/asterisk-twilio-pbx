@@ -37,10 +37,16 @@ log_error() {
 # variables. This ensures that secrets are not stored in the image or in
 # version control. If any are missing, we fail fast with a clear message.
 REQUIRED_VARS=(
-  "TWILIO_USERNAME"  # Twilio SIP trunk username (often the same as account SID or trunk auth user).
-  "TWILIO_PASSWORD"  # Twilio SIP trunk password/secret.
-  "TWILIO_DOMAIN"    # Twilio SIP domain, e.g. youraccount.sip.twilio.com.
-  "GW_1001_PASSWORD" # Local SIP endpoint password for extension 1001.
+  "TWILIO_USERNAME"     # Twilio SIP trunk username
+  "TWILIO_PASSWORD"     # Twilio SIP trunk password
+  "TWILIO_DOMAIN"       # Your Twilio SIP trunk domain
+  "TWILIO_PSTN_DOMAIN"  # Twilio PSTN SIP domain
+  "GW_1001_PASSWORD"    # Extension 1001 password
+  "GW_1002_PASSWORD"    # Extension 1002 password
+  "GW_1003_PASSWORD"    # Extension 1003 password
+  "LAN_IP"              # PBX LAN IP address
+  "LAN_CIDR"            # PBX LAN CIDR range
+  "EXTERNAL_IP"         # PBX external/public IP address
 )
 
 missing=false

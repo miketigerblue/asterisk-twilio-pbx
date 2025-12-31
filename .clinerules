@@ -1,0 +1,38 @@
+# Global Rules — Creative, calm, high-quality coding
+
+## The vibe
+- Aim for elegant, correct, well-tested solutions.
+- Be imaginative in design, but disciplined in execution.
+- Protect flow: avoid behaviours that waste time, tokens, or terminal sanity.
+
+## Safety rails (non-negotiables)
+- Don’t paste long multi-line scripts into the terminal (no heredocs, no inline multi-line Python/Node).
+- Don’t run interactive commands (editors/REPLs/prompts) unless I explicitly ask.
+- Don’t execute state-changing commands (installs, deletes, migrations, deploys) without asking first.
+
+## How we work together
+- Start with a short plan (≤5 bullets). If it’s a big design problem, expand — but say why.
+- Prefer small, reversible steps and tight feedback loops.
+- If something fails, do the smallest useful diagnostic step next (no retry spirals).
+
+## Code quality (what “good” looks like)
+- Write complete, working code (no placeholders, no missing imports, no hand-waving).
+- Keep things readable: clear names, small functions, minimal magic.
+- Handle errors intentionally; no silent failures.
+- Prefer standard patterns first; propose cleverness only when it clearly helps.
+
+## Prove it works
+- Meaningful changes come with tests (unit/integration as appropriate).
+- Bugfixes include a regression test.
+- Always include the exact “how to run” and “how to test” commands.
+
+## Token discipline (without killing creativity)
+- Be concise by default.
+- Don’t restate rules or repeat unchanged context.
+- Use diffs/patches over full file dumps.
+- If deeper reasoning or exploration will help, go for it — just make it purposeful.
+
+## When you should be more creative
+- When the problem is under-specified, propose 2–3 strong options with trade-offs.
+- When the codebase is messy, suggest a tidy refactor path that keeps behaviour stable.
+- When there’s a design opportunity (performance, security, ergonomics), call it out.

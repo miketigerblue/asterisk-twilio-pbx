@@ -9,10 +9,8 @@
 # referenced by the role when creating directories and copying files.
 pbx_project_dir: /opt/asterisk-twilio-pbx
 
-# Docker image to deploy on the Raspberry Pi. Replace <OWNER> with your
-# GitHub username or organisation so that it matches the image published by
-# the build-and-push GitHub Action.
-pbx_image: "ghcr.io/<OWNER>/asterisk-twilio-pbx:latest"
+# Docker image to deploy on the Raspberry Pi.
+pbx_image: "ghcr.io/miketigerblue/asterisk-twilio-pbx:latest"
 
 # Optional: path to the docker compose binary. On modern Docker installations,
 # `docker compose` is provided as a subcommand, so we default to that usage.
