@@ -1,5 +1,4 @@
-![ODIN realtime voice architecture](docs/diagrams/odin-realtime-architecture.png)
-> Editable source: `docs/diagrams/odin-realtime-architecture.drawio`
+
 
 ## How to read this repo (recommended)
 
@@ -31,6 +30,9 @@ This repo is a **portfolio-grade “old-school SIP” bridge** that combines:
 - A real-time, agentic voice layer: **Twilio Media Streams → `odin-realtime-bridge` (Fly.io) → OpenAI Realtime**
 
 It’s designed to show how a classic PBX can become a **natural language interface** to a modern “sensor fusion” threat-intel stack.
+
+![ODIN realtime voice architecture](docs/diagrams/odin-realtime-architecture.png)
+> Editable source: `docs/diagrams/odin-realtime-architecture.drawio`
 
 ## Why this project exists (portfolio narrative)
 
