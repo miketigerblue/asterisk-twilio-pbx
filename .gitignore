@@ -36,6 +36,10 @@ realtime-bridge/fly.toml
 # macOS cruft
 .DS_Store
 
+# Diagrams (Draw.io)
+*.drawio.bkp
+docs/diagrams/.$*.drawio.bkp
+
 # Pi-specific override files
 # --------------------------
 # If you add host-specific override compose files or configuration for the Pi,

@@ -183,6 +183,17 @@ The bridge (`realtime-bridge/src/server.js`) is built for “voice UX” realiti
 
 See: **[`realtime-bridge/README.md`](./realtime-bridge/README.md)** for diagrams and env vars.
 
+---
+
+## Inbound PSTN calls (Twilio Number → allowlist → agent / voicemail)
+
+In addition to SIP Domain call-control, you can route **inbound calls to your Twilio phone number** using ANI allowlists:
+
+- known callers → greeting → ODIN/RIZZY
+- unknown callers → Twilio voicemail recording + email link
+
+Docs: **[`docs/inbound-number.md`](./docs/inbound-number.md)**
+
 
 ---
 
@@ -490,5 +501,3 @@ For a deeper runbook, see **[RUNBOOK.md](./RUNBOOK.md)**.
 This repo includes GitHub Actions workflows for building and deploying images.
 
 However, the current Ansible role deploy path builds locally on the Pi from the synced repo. If you want a “pull from GHCR” model instead, you can adapt the role/template back to using a published image.
-
-
