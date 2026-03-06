@@ -34,10 +34,6 @@ It’s designed to show how a classic PBX can become a **natural language interf
 ![ODIN realtime voice architecture](docs/diagrams/odin-realtime-architecture.png)
 > Editable source: `docs/diagrams/odin-realtime-architecture.drawio`
 
-### See it in action
-
-[![ODIN call walkthrough](https://img.youtube.com/vi/YOUR_VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)
-> **14-min walkthrough:** SIP call → Twilio → ODIN realtime voice agent → tool calls → teardown
 
 ## Why this project exists (portfolio narrative)
 
