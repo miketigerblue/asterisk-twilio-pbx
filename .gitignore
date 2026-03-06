@@ -38,7 +38,9 @@ realtime-bridge/fly.toml
 
 # Diagrams (Draw.io)
 *.drawio.bkp
+*.drawio.dtmp
 docs/diagrams/.$*.drawio.bkp
+docs/diagrams/.$*.drawio.dtmp
 
 # Pi-specific override files
 # --------------------------
@@ -47,3 +49,10 @@ docs/diagrams/.$*.drawio.bkp
 # commits of per-device tweaks.
 compose/docker-compose.pi.override.yml
 ansible/local-overrides.yml
+
+# Generated reports (from ODIN threat-intel workflows)
+docs/threat-landscape-*.html
+
+# Cline / AI assistant state
+.clinerules
+.tmp/

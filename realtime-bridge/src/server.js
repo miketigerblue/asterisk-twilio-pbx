@@ -27,6 +27,9 @@ const TOOL_EVENT_LOG_LEVEL = ['none', 'ids', 'verbose'].includes(TOOL_EVENT_LOG_
 
 const TWILIO_STREAM_HMAC_SECRET = process.env.TWILIO_STREAM_HMAC_SECRET;
 
+// IMPORTANT: Set these via environment variables. The defaults below are
+// placeholders — a real deployment must provide its own PostgREST and
+// Cyberscape Nexus endpoints.
 const SITREP_BASE_URL = process.env.SITREP_BASE_URL || 'https://your-postgrest-instance.example.com';
 const CYBERSCAPE_NEXUS_BASE_URL = process.env.CYBERSCAPE_NEXUS_BASE_URL || 'https://your-nexus-instance.example.com';
 
@@ -1203,6 +1206,94 @@ wss.on('connection', async (twilioWs, req, auth) => {
     return { ok: true, count: rows.length, results: rows };
   }
 
+  async function tool_convergence_alerts(args) {
+    const limit = Math.max(1, Math.min(20, parseInt(args?.limit ?? 5, 10) || 5));
+    const sector = args?.sector ? String(args.sector).trim() : null;
+    const geography = args?.geography ? String(args.geography).trim().toUpperCase() : null;
+
+    const filters = [];
+    if (sector) filters.push(`sector=ilike.*${encodeURIComponent(sector)}*`);
+    if (geography) filters.push(`geography=ilike.*${encodeURIComponent(geography)}*`);
+
+    const qs = `select=id,sector,geography,first_seen,last_seen,convergence_score,dimensions_hit,detail&${filters.join(
+      '&',
+    )}&order=convergence_score.desc&limit=${encodeURIComponent(String(limit))}`;
+
+    const r = await postgrestGet('/number2_convergence_alerts_active', qs, 10000);
+    if (!r.ok) return { ok: false, error: r.error };
+
+    const rows = Array.isArray(r.data) ? r.data : [];
+    // Trim the heavy detail.dimension_details to keep token budget manageable.
+    const trimmed = rows.map((row) => {
+      const d = row.detail || {};
+      return {
+        id: row.id,
+        sector: row.sector,
+        geography: row.geography,
+        first_seen: row.first_seen,
+        last_seen: row.last_seen,
+        convergence_score: row.convergence_score,
+        band: d.band,
+        dimensions_hit: row.dimensions_hit,
+        hours_active: d.hours_active,
+        distinct_signals: d.distinct_signals,
+        clusters_involved: d.clusters_involved,
+        dimension_summary: {
+          actors: (d.dimension_details?.actor || []).slice(0, 5),
+          ttps: (d.dimension_details?.ttp || []).slice(0, 10),
+          sectors: d.dimension_details?.sector || [],
+          geos: (d.dimension_details?.geo || []).slice(0, 10),
+        },
+      };
+    });
+
+    return { ok: true, count: trimmed.length, sector, geography, results: trimmed };
+  }
+
+  async function tool_epss_landscape(args) {
+    // Single-row daily snapshot — no parameters needed.
+    void args; // unused
+    const qs = 'select=as_of,cves_total,epss_q50,epss_q75,epss_q90,epss_q95,epss_q99,epss_max,epss_ge_0_2,epss_ge_0_5,epss_ge_0_7,pct_ge_95,pct_ge_99,kev_total,kev_epss_ge_0_2,kev_epss_ge_0_5,kev_epss_ge_0_7,crossed_up_0_2,crossed_up_0_5,crossed_up_0_7,top_epss,top_movers_1d,top_crossers_0_5&limit=1';
+
+    const r = await postgrestGet('/number2_epss_daily_features_latest', qs, 10000);
+    if (!r.ok) return { ok: false, error: r.error };
+
+    const row = Array.isArray(r.data) ? r.data[0] : null;
+    if (!row) return { ok: false, error: 'not_found' };
+
+    return { ok: true, landscape: row };
+  }
+
+  async function tool_epss_weekly_movers(args) {
+    const limit = Math.max(1, Math.min(50, parseInt(args?.limit ?? 10, 10) || 10));
+    const qs = `select=cve_id,current_week,current_epss,previous_epss,epss_delta,current_percentile&order=epss_delta.desc&limit=${encodeURIComponent(
+      String(limit),
+    )}`;
+
+    const r = await postgrestGet('/v_epss_weekly_movers', qs, 12000);
+    if (!r.ok) return { ok: false, error: r.error };
+
+    const rows = Array.isArray(r.data) ? r.data : [];
+    return { ok: true, count: rows.length, results: rows };
+  }
+
+  async function tool_epss_trend(args) {
+    const cveId = cleanCveId(args?.cve_id || args?.cve || args?.id);
+    if (!cveId) return { ok: false, error: 'invalid_cve_id' };
+
+    const qs = `select=cve_id,week_start,avg_epss,max_epss,max_percentile,sample_count&cve_id=eq.${encodeURIComponent(
+      cveId,
+    )}&order=week_start.desc&limit=13`;
+
+    const r = await postgrestGet('/v_epss_trend_90d', qs, 12000);
+    if (!r.ok) return { ok: false, error: r.error };
+
+    const rows = Array.isArray(r.data) ? r.data : [];
+    if (rows.length === 0) return { ok: false, error: 'not_found' };
+
+    return { ok: true, cve_id: cveId, weeks: rows.length, trend: rows };
+  }
+
   async function executeToolByName(name, args) {
     switch (name) {
       case 'semantic_search_news':
@@ -1217,6 +1308,14 @@ wss.on('connection', async (twilioWs, req, auth) => {
         return tool_epss_latest(args);
       case 'epss_movers_24h':
         return tool_epss_movers_24h(args);
+      case 'convergence_alerts':
+        return tool_convergence_alerts(args);
+      case 'epss_landscape':
+        return tool_epss_landscape(args);
+      case 'epss_weekly_movers':
+        return tool_epss_weekly_movers(args);
+      case 'epss_trend':
+        return tool_epss_trend(args);
       default:
         return { ok: false, error: `unknown_tool:${name}` };
     }
@@ -1831,6 +1930,83 @@ wss.on('connection', async (twilioWs, req, auth) => {
                   },
                 },
                 required: [],
+              },
+            },
+            {
+              type: 'function',
+              name: 'convergence_alerts',
+              description:
+                'List active multi-dimensional threat convergence alerts, scored by how many independent intelligence dimensions (TTPs, actors, sectors, geographies) are signalling simultaneously. Use when the caller asks about converging threats, cross-domain threat signals, or threat clusters. When presenting results, be BRIEF: state the score band (critical/high/medium), sector, geography, and the top 1-2 notable dimensions. Do NOT enumerate every TTP, actor, or geography — give a concise spoken summary.',
+              parameters: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  sector: {
+                    type: 'string',
+                    description: 'Optional sector filter (e.g. ics_ot, enterprise, government).',
+                    nullable: true,
+                  },
+                  geography: {
+                    type: 'string',
+                    description: 'Optional geography filter (e.g. US, EU, GLOBAL).',
+                    nullable: true,
+                  },
+                  limit: {
+                    type: 'integer',
+                    description: 'Max results (1-20).',
+                    minimum: 1,
+                    maximum: 20,
+                  },
+                },
+                required: [],
+              },
+            },
+            {
+              type: 'function',
+              name: 'epss_landscape',
+              description:
+                'Get today\'s EPSS landscape snapshot: total CVEs scored, quantile breakdowns (q50-q99), threshold crossing counts (>=0.2, >=0.5, >=0.7), KEV overlap statistics, and top movers/crossers. No parameters needed. Use when the caller asks for the overall EPSS landscape, exploit probability overview, or vulnerability scoring summary.',
+              parameters: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {},
+                required: [],
+              },
+            },
+            {
+              type: 'function',
+              name: 'epss_weekly_movers',
+              description:
+                'List top EPSS movers week-over-week (from local database). Use when the caller asks about weekly EPSS trends or which CVEs moved most this week. ONLY use if caller explicitly asks about weekly EPSS movers.',
+              parameters: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  limit: {
+                    type: 'integer',
+                    description: 'Max results (1-50).',
+                    minimum: 1,
+                    maximum: 50,
+                  },
+                },
+                required: [],
+              },
+            },
+            {
+              type: 'function',
+              name: 'epss_trend',
+              description:
+                'Get the 90-day weekly EPSS trend for a specific CVE. Returns up to 13 weekly data points with average and max EPSS scores. Use when the caller asks how a CVE\'s exploit probability has changed over time.',
+              parameters: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  cve_id: {
+                    type: 'string',
+                    description: 'CVE identifier, e.g. CVE-2024-12345.',
+                  },
+                },
+                required: ['cve_id'],
               },
             },
           ],

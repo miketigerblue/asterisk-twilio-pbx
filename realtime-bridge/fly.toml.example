@@ -1,0 +1,44 @@
+# fly.toml.example — Fly.io configuration for odin-realtime-bridge
+#
+# Copy this file to fly.toml and update the app name before deploying:
+#   cp fly.toml.example fly.toml
+#   fly launch --name your-app-name --region lhr --no-deploy
+#   fly secrets set OPENAI_API_KEY=... TWILIO_STREAM_HMAC_SECRET=... SITREP_BASE_URL=...
+#   fly deploy
+#
+# See https://fly.io/docs/reference/configuration/ for full reference.
+
+app = 'your-app-name'
+primary_region = 'lhr'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  PORT = '8080'
+
+[[services]]
+  protocol = 'tcp'
+  internal_port = 8080
+
+  [[services.ports]]
+    port = 80
+    handlers = ['http']
+
+  [[services.ports]]
+    port = 443
+    handlers = ['tls', 'http']
+
+  [services.concurrency]
+    type = 'connections'
+    hard_limit = 50
+    soft_limit = 25
+
+  [[services.tcp_checks]]
+    interval = '15s'
+    timeout = '2s'
+
+[[vm]]
+  memory = '1gb'
+  cpus = 1
+  memory_mb = 1024

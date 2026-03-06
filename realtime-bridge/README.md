@@ -167,8 +167,8 @@ flowchart TD
 - `OPENAI_REALTIME_MODEL` (optional) e.g. `gpt-realtime-2025-08-28`
 - `OPENAI_VOICE` (optional) default `alloy` (voice name for realtime TTS)
 - `TWILIO_STREAM_HMAC_SECRET` (required) – used to validate Twilio Stream URL tokens (must match Twilio Function `ODIN_HMAC_SECRET`)
-- `SITREP_BASE_URL` (optional) defaults to `https://your-postgrest-instance.example.com`
-- `CYBERSCAPE_NEXUS_BASE_URL` (optional) default `https://your-nexus-instance.example.com` (semantic news search service)
+- `SITREP_BASE_URL` (optional) your PostgREST instance URL (defaults to a placeholder — you must configure this for your deployment)
+- `CYBERSCAPE_NEXUS_BASE_URL` (optional) your semantic news search service URL (defaults to a placeholder)
 - `SITREP_WINDOW_HOURS` (optional) default `24` (agent’s default “SITREP window”)
 - `SITREP_REFRESH_SECONDS` (optional) default `1800` (30 min) (scheduled refresh interval)
 - `SITREP_HOURLY_HISTORY_HOURS` (optional) default `168` (cache last 7 days of hourly sitreps)

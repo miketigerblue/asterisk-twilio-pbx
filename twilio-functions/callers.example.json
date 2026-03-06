@@ -1,7 +1,7 @@
 {
   "+447700900001": {
-    "name": "Mike",
-    "greeting": "Hey Mike — you’re through to the lab PBX.",
+    "name": "Operator",
+    "greeting": "Hey — you're through to the lab PBX.",
     "route": "agent",
     "agent": "odin"
   },
