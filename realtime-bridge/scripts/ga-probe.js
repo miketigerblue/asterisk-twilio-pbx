@@ -12,7 +12,7 @@
 //   OPENAI_VOICE             default marin
 //   PROBE_AUDIO_FORMAT       default audio/pcmu  (try g711_ulaw if rejected)
 //   PROBE_DURATION_MS        default 8000
-//   OPENAI_NOISE_REDUCTION   default near_field  (set to "none" to omit)
+//   OPENAI_NOISE_REDUCTION   default near_field  (set to "none" to send null / disable)
 //   OPENAI_OUTPUT_SPEED      unset by default    (e.g. 0.95 to test)
 
 import WebSocket from 'ws';
