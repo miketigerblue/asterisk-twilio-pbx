@@ -8,10 +8,12 @@
 // Run: OPENAI_API_KEY=... node scripts/ga-probe.js
 //
 // Env overrides:
-//   OPENAI_REALTIME_MODEL  default gpt-realtime-1.5
-//   OPENAI_VOICE           default marin
-//   PROBE_AUDIO_FORMAT     default audio/pcmu  (try g711_ulaw if rejected)
-//   PROBE_DURATION_MS      default 8000
+//   OPENAI_REALTIME_MODEL    default gpt-realtime-1.5
+//   OPENAI_VOICE             default marin
+//   PROBE_AUDIO_FORMAT       default audio/pcmu  (try g711_ulaw if rejected)
+//   PROBE_DURATION_MS        default 8000
+//   OPENAI_NOISE_REDUCTION   default near_field  (set to "none" to send null / disable)
+//   OPENAI_OUTPUT_SPEED      unset by default    (e.g. 0.95 to test)
 
 import WebSocket from 'ws';
 
@@ -26,9 +28,42 @@ const VOICE = process.env.OPENAI_VOICE || 'marin';
 const AUDIO_FORMAT = process.env.PROBE_AUDIO_FORMAT || 'audio/pcmu';
 const DURATION_MS = parseInt(process.env.PROBE_DURATION_MS || '8000', 10);
 
+const NOISE_REDUCTION_ALLOWED = ['near_field', 'far_field', 'none'];
+const NOISE_REDUCTION_RAW = (process.env.OPENAI_NOISE_REDUCTION || 'near_field').toLowerCase();
+if (!NOISE_REDUCTION_ALLOWED.includes(NOISE_REDUCTION_RAW)) {
+  console.error(
+    `[probe] Invalid OPENAI_NOISE_REDUCTION "${NOISE_REDUCTION_RAW}"; ` +
+      `allowed: ${NOISE_REDUCTION_ALLOWED.join(', ')}. Falling back to near_field.`,
+  );
+}
+const NOISE_REDUCTION_VAL = NOISE_REDUCTION_ALLOWED.includes(NOISE_REDUCTION_RAW) ? NOISE_REDUCTION_RAW : 'near_field';
+const NOISE_REDUCTION = NOISE_REDUCTION_VAL === 'none' ? null : { type: NOISE_REDUCTION_VAL };
+
+const OUTPUT_SPEED = (() => {
+  const raw = process.env.OPENAI_OUTPUT_SPEED;
+  if (raw == null || raw === '') return null;
+  const parsed = parseFloat(raw);
+  if (!Number.isFinite(parsed)) {
+    console.error(`[probe] OPENAI_OUTPUT_SPEED "${raw}" is not a valid number; ignoring.`);
+    return null;
+  }
+  if (parsed < 0.25 || parsed > 4.0) {
+    console.error(`[probe] OPENAI_OUTPUT_SPEED ${parsed} is outside the accepted range 0.25–4.0; ignoring.`);
+    return null;
+  }
+  return parsed;
+})();
+
 const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(MODEL)}`;
 
-console.log('[probe] connecting', { url, model: MODEL, voice: VOICE, audio_format: AUDIO_FORMAT });
+console.log('[probe] connecting', {
+  url,
+  model: MODEL,
+  voice: VOICE,
+  audio_format: AUDIO_FORMAT,
+  noise_reduction: NOISE_REDUCTION,
+  output_speed: OUTPUT_SPEED,
+});
 
 const ws = new WebSocket(url, {
   headers: {
@@ -47,6 +82,7 @@ const sessionUpdate = {
     audio: {
       input: {
         format: { type: AUDIO_FORMAT },
+        noise_reduction: NOISE_REDUCTION,
         turn_detection: {
           type: 'server_vad',
           interrupt_response: true,
@@ -60,6 +96,7 @@ const sessionUpdate = {
       output: {
         format: { type: AUDIO_FORMAT },
         voice: VOICE,
+        ...(Number.isFinite(OUTPUT_SPEED) ? { speed: OUTPUT_SPEED } : {}),
       },
     },
   },

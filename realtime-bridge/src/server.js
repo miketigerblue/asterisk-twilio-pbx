@@ -6,8 +6,41 @@ import WebSocket, { WebSocketServer } from 'ws';
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2025-08-28';
-const OPENAI_VOICE = process.env.OPENAI_VOICE || 'alloy';
+const OPENAI_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-1.5';
+const OPENAI_VOICE = process.env.OPENAI_VOICE || 'marin';
+
+// Audio input noise reduction. Phone audio benefits from near_field; set to
+// 'far_field' for room-mic scenarios. If unset, defaults to near_field; set
+// to 'none' to disable.
+const NOISE_REDUCTION_ALLOWED = ['near_field', 'far_field', 'none'];
+const OPENAI_NOISE_REDUCTION_RAW = (process.env.OPENAI_NOISE_REDUCTION || 'near_field').toLowerCase();
+if (!NOISE_REDUCTION_ALLOWED.includes(OPENAI_NOISE_REDUCTION_RAW)) {
+  console.error(
+    `[config] Invalid OPENAI_NOISE_REDUCTION "${OPENAI_NOISE_REDUCTION_RAW}"; ` +
+      `allowed: ${NOISE_REDUCTION_ALLOWED.join(', ')}. Falling back to near_field.`,
+  );
+}
+const OPENAI_NOISE_REDUCTION = NOISE_REDUCTION_ALLOWED.includes(OPENAI_NOISE_REDUCTION_RAW)
+  ? OPENAI_NOISE_REDUCTION_RAW
+  : 'near_field';
+const NOISE_REDUCTION_CONFIG = OPENAI_NOISE_REDUCTION === 'none' ? null : { type: OPENAI_NOISE_REDUCTION };
+
+// Output playback speed. Server default is 1.0; values 0.25–4.0 accepted by the API.
+// Leave unset to inherit the server default.
+const OPENAI_OUTPUT_SPEED_RAW = process.env.OPENAI_OUTPUT_SPEED;
+const OPENAI_OUTPUT_SPEED = (() => {
+  if (OPENAI_OUTPUT_SPEED_RAW == null || OPENAI_OUTPUT_SPEED_RAW === '') return null;
+  const parsed = parseFloat(OPENAI_OUTPUT_SPEED_RAW);
+  if (!Number.isFinite(parsed)) {
+    console.error(`[config] OPENAI_OUTPUT_SPEED "${OPENAI_OUTPUT_SPEED_RAW}" is not a valid number; ignoring.`);
+    return null;
+  }
+  if (parsed < 0.25 || parsed > 4.0) {
+    console.error(`[config] OPENAI_OUTPUT_SPEED ${parsed} is outside the accepted range 0.25–4.0; ignoring.`);
+    return null;
+  }
+  return parsed;
+})();
 
 // Tool execution logging:
 //  - none: no tool logs beyond existing
@@ -615,6 +648,14 @@ Style guide:
 - Keep it nephew-friendly (no profanity, no gratuitous gore/violence).
 - Speak in short sentences suitable for audio.
 
+Voice delivery (this is a phone call — pace, not just words, matters):
+- Warm, measured analyst tone — knowledgeable older-cousin energy, not radio-host.
+- Slightly slower than a normal assistant voice; let key facts land before moving on.
+- Short sentences suitable for telephone audio.
+- Pause briefly after severity labels, CVE identifiers, and action recommendations.
+- When using dry wit, deliver it flat — never a forced punch line.
+- If you need to say a CVE number aloud, say each segment naturally — "CVE twenty twenty-four, twelve thousand three forty-five" — not letter-by-letter.
+
 ${shared}
 
 Conversation style:
@@ -637,6 +678,14 @@ Style guide:
 - Calm, confident, direct.
 - Less procedural. More like a real SOC lead briefing a human.
 - Keep responses short and interactive.
+
+Voice delivery (this is a phone call — pace, not just words, matters):
+- Speak like a senior cyber duty officer giving a SITREP.
+- Calm, authoritative, unhurried. Slightly slower than a normal assistant voice.
+- Short sentences suitable for telephone audio.
+- Pause briefly after severity labels ("Critical."), CVE identifiers ("CVE-2024-12345 …"), and action recommendations.
+- Do not sound cheerful, performative, or apologetic. Do not over-explain.
+- If you need to say a CVE number aloud, say each segment naturally — "CVE twenty twenty-four, twelve thousand three forty-five" — not letter-by-letter.
 
 ${shared}
 
@@ -1844,6 +1893,7 @@ wss.on('connection', async (twilioWs, req, auth) => {
           audio: {
             input: {
               format: { type: 'audio/pcmu' },
+              noise_reduction: NOISE_REDUCTION_CONFIG,
               transcription: {
                 model: 'gpt-4o-transcribe',
                 language: 'en',
@@ -1859,6 +1909,7 @@ wss.on('connection', async (twilioWs, req, auth) => {
             output: {
               format: { type: 'audio/pcmu' },
               voice: OPENAI_VOICE,
+              ...(Number.isFinite(OPENAI_OUTPUT_SPEED) ? { speed: OPENAI_OUTPUT_SPEED } : {}),
             },
           },
 
