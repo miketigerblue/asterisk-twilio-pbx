@@ -31,6 +31,7 @@ const TWILIO_STREAM_HMAC_SECRET = process.env.TWILIO_STREAM_HMAC_SECRET;
 // placeholders — a real deployment must provide its own PostgREST and
 // Cyberscape Nexus endpoints.
 const SITREP_BASE_URL = process.env.SITREP_BASE_URL || 'https://your-postgrest-instance.example.com';
+const SITREP_API_TOKEN = process.env.SITREP_API_TOKEN || '';
 const CYBERSCAPE_NEXUS_BASE_URL = process.env.CYBERSCAPE_NEXUS_BASE_URL || 'https://your-nexus-instance.example.com';
 
 const SITREP_WINDOW_HOURS = parseInt(process.env.SITREP_WINDOW_HOURS || '24', 10);
@@ -251,8 +252,10 @@ async function fetchWithTimeout(url, timeoutMs = 4000) {
   const t = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const headers = { accept: 'application/json' };
+    if (SITREP_API_TOKEN) headers.authorization = `Bearer ${SITREP_API_TOKEN}`;
     const r = await fetch(url, {
-      headers: { accept: 'application/json' },
+      headers,
       signal: controller.signal,
     });
 
@@ -652,7 +655,6 @@ function openAiRealtime() {
   return new WebSocket(url, {
     headers: {
       Authorization: `Bearer ${OPENAI_API_KEY}`,
-      'OpenAI-Beta': 'realtime=v1',
     },
   });
 }
@@ -802,6 +804,12 @@ wss.on('connection', async (twilioWs, req, auth) => {
   // makes sense, reducing noise and avoiding disrupting tool-driven responses.
   let responseIsActive = false;
   let lastCancelAtMs = 0;
+
+  // Track the in-flight assistant message item + how much of its audio we
+  // actually played out to Twilio. Required to send conversation.item.truncate
+  // on barge-in so the model's transcript matches what the caller heard.
+  let lastAssistantItemId = null;
+  let assistantAudioPlayedMs = 0;
 
   // VAD can be chatty (rapid start/stop), especially on phone lines.
   // Debounce speech-start events so we don't repeatedly clear/suppress audio,
@@ -1368,7 +1376,7 @@ wss.on('connection', async (twilioWs, req, auth) => {
         openAiSend(openaiWs, {
           type: 'response.create',
           response: {
-            modalities: ['audio', 'text'],
+            output_modalities: ['audio'],
           },
         });
 
@@ -1680,6 +1688,7 @@ wss.on('connection', async (twilioWs, req, auth) => {
           streamSid,
           media: { payload: frame.toString('base64') },
         });
+        assistantAudioPlayedMs += OUT_FRAME_MS;
       }
 
       // Release backpressure once we've drained to a reasonable level.
@@ -1745,6 +1754,12 @@ wss.on('connection', async (twilioWs, req, auth) => {
     activeResponseId = null;
     outSuppressUntilMs = now + 250;
 
+    // Capture playback position BEFORE we wipe the local queue. The model needs
+    // to know how much of its assistant audio actually reached the caller, so
+    // its conversation transcript matches what was heard.
+    const truncateItemId = lastAssistantItemId;
+    const truncatePlayedMs = assistantAudioPlayedMs;
+
     // Locally clear any queued audio (this is the most important part).
     clearOutAudio(reason);
 
@@ -1754,6 +1769,26 @@ wss.on('connection', async (twilioWs, req, auth) => {
     if (responseIsActive && openaiWs && openaiWs.readyState === WebSocket.OPEN) {
       openAiSend(openaiWs, { type: 'response.cancel' });
     }
+
+    // Truncate the assistant item to the audio actually played. Without this,
+    // the model believes it said the full response, which corrupts subsequent
+    // turns ("as I just mentioned…" referencing audio the caller never heard).
+    if (
+      truncateItemId &&
+      truncatePlayedMs > 0 &&
+      openaiWs &&
+      openaiWs.readyState === WebSocket.OPEN
+    ) {
+      openAiSend(openaiWs, {
+        type: 'conversation.item.truncate',
+        item_id: truncateItemId,
+        content_index: 0,
+        audio_end_ms: truncatePlayedMs,
+      });
+    }
+
+    lastAssistantItemId = null;
+    assistantAudioPlayedMs = 0;
   }
 
   function maybeSendInitialResponse() {
@@ -1765,7 +1800,7 @@ wss.on('connection', async (twilioWs, req, auth) => {
     openAiSend(openaiWs, {
       type: 'response.create',
       response: {
-        modalities: ['audio', 'text'],
+        output_modalities: ['audio'],
         instructions: `Open with a short greeting and deliver a concise (<= 25 seconds) CYBER THREAT SITREP for the past ${SITREP_WINDOW_HOURS} hours. Give 2-3 headlines max, then ask what they want to drill into (headlines vs vendor search vs CVE lookup). Stay cyber-only. If threat intel data is missing, say so explicitly.`,
       },
     });
@@ -1802,12 +1837,30 @@ wss.on('connection', async (twilioWs, req, auth) => {
       openAiSend(openaiWs, {
         type: 'session.update',
         session: {
-          modalities: ['text', 'audio'],
+          type: 'realtime',
+          model: OPENAI_REALTIME_MODEL,
+          output_modalities: ['audio'],
           instructions: systemPrompt,
-          input_audio_format: 'g711_ulaw',
-          output_audio_format: 'g711_ulaw',
-          voice: OPENAI_VOICE,
-          turn_detection: { type: 'server_vad' },
+          audio: {
+            input: {
+              format: { type: 'audio/pcmu' },
+              transcription: {
+                model: 'gpt-4o-transcribe',
+                language: 'en',
+                prompt:
+                  'Cybersecurity briefing terms: CVE, KEV, EPSS, CISA, NVD, ransomware, zero-day, privilege escalation, remote code execution.',
+              },
+              turn_detection: {
+                type: 'server_vad',
+                interrupt_response: true,
+                create_response: true,
+              },
+            },
+            output: {
+              format: { type: 'audio/pcmu' },
+              voice: OPENAI_VOICE,
+            },
+          },
 
           // Tool calling (natural-language → approved API calls).
           // We keep this list small and strongly scoped to cyber intel.
@@ -2273,13 +2326,69 @@ wss.on('connection', async (twilioWs, req, auth) => {
         assistantSpeaking = true;
         activeResponseId = msg?.response?.id || msg?.response_id || msg?.id || activeResponseId;
       }
-      if (msg.type === 'response.done' || msg.type === 'response.cancelled' || msg.type === 'response.audio.done') {
+
+      // Capture assistant message item id for truncate-on-barge-in.
+      // GA emits both response.output_item.added and (newer) conversation.item.added.
+      // Accept either; only pick up assistant message items, not function_calls.
+      if (
+        (msg.type === 'response.output_item.added' || msg.type === 'conversation.item.added') &&
+        msg?.item?.type === 'message' &&
+        msg?.item?.role === 'assistant' &&
+        msg?.item?.id
+      ) {
+        lastAssistantItemId = msg.item.id;
+        assistantAudioPlayedMs = 0;
+      }
+
+      // Audio done event renamed in GA (response.audio.done → response.output_audio.done).
+      // Accept both during migration.
+      if (
+        msg.type === 'response.done' ||
+        msg.type === 'response.cancelled' ||
+        msg.type === 'response.audio.done' ||
+        msg.type === 'response.output_audio.done'
+      ) {
         responseIsActive = false;
         assistantSpeaking = false;
         activeResponseId = null;
+        // Once a response naturally completes, the item is committed; clear so
+        // a later spurious cancel doesn't try to truncate a finished item.
+        if (msg.type === 'response.done' || msg.type === 'response.cancelled') {
+          lastAssistantItemId = null;
+          assistantAudioPlayedMs = 0;
+        }
       }
 
-      if (msg.type === 'response.audio.delta' && msg.delta) {
+      // Caller transcript (input audio transcription) — observability only.
+      // Completion events can arrive out of order between turns; key by item_id.
+      if (msg.type === 'conversation.item.input_audio_transcription.delta' && msg.delta) {
+        console.log('[caller][transcript_delta]', {
+          callSid: tokenPayload?.callSid,
+          item_id: msg.item_id,
+          delta: msg.delta,
+        });
+      }
+      if (msg.type === 'conversation.item.input_audio_transcription.completed') {
+        console.log('[caller][transcript_done]', {
+          callSid: tokenPayload?.callSid,
+          item_id: msg.item_id,
+          transcript: msg.transcript,
+        });
+      }
+      if (msg.type === 'conversation.item.input_audio_transcription.failed') {
+        console.warn('[caller][transcript_failed]', {
+          callSid: tokenPayload?.callSid,
+          item_id: msg.item_id,
+          error: msg.error,
+        });
+      }
+
+      // Audio delta event renamed in GA (response.audio.delta → response.output_audio.delta).
+      // Accept both during migration.
+      if (
+        (msg.type === 'response.audio.delta' || msg.type === 'response.output_audio.delta') &&
+        msg.delta
+      ) {
         // Receiving audio deltas implies a response is active, even if we didn't
         // observe a `response.created` event.
         responseIsActive = true;
