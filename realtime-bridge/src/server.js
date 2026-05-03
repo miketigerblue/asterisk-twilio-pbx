@@ -10,7 +10,8 @@ const OPENAI_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime
 const OPENAI_VOICE = process.env.OPENAI_VOICE || 'marin';
 
 // Audio input noise reduction. Phone audio benefits from near_field; set to
-// 'far_field' for room-mic scenarios, or leave unset to disable.
+// 'far_field' for room-mic scenarios. If unset, defaults to near_field; set
+// to 'none' or '' to disable.
 const OPENAI_NOISE_REDUCTION = (process.env.OPENAI_NOISE_REDUCTION || 'near_field').toLowerCase();
 const NOISE_REDUCTION_CONFIG =
   OPENAI_NOISE_REDUCTION === 'none' || OPENAI_NOISE_REDUCTION === ''
