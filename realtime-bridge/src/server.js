@@ -6,8 +6,23 @@ import WebSocket, { WebSocketServer } from 'ws';
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2025-08-28';
-const OPENAI_VOICE = process.env.OPENAI_VOICE || 'alloy';
+const OPENAI_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-1.5';
+const OPENAI_VOICE = process.env.OPENAI_VOICE || 'marin';
+
+// Audio input noise reduction. Phone audio benefits from near_field; set to
+// 'far_field' for room-mic scenarios, or leave unset to disable.
+const OPENAI_NOISE_REDUCTION = (process.env.OPENAI_NOISE_REDUCTION || 'near_field').toLowerCase();
+const NOISE_REDUCTION_CONFIG =
+  OPENAI_NOISE_REDUCTION === 'none' || OPENAI_NOISE_REDUCTION === ''
+    ? null
+    : { type: OPENAI_NOISE_REDUCTION };
+
+// Output playback speed. Server default is 1.0; values 0.85–1.15 are typical.
+// Leave unset to inherit the server default.
+const OPENAI_OUTPUT_SPEED_RAW = process.env.OPENAI_OUTPUT_SPEED;
+const OPENAI_OUTPUT_SPEED = OPENAI_OUTPUT_SPEED_RAW
+  ? parseFloat(OPENAI_OUTPUT_SPEED_RAW)
+  : null;
 
 // Tool execution logging:
 //  - none: no tool logs beyond existing
@@ -615,6 +630,14 @@ Style guide:
 - Keep it nephew-friendly (no profanity, no gratuitous gore/violence).
 - Speak in short sentences suitable for audio.
 
+Voice delivery (this is a phone call — pace, not just words, matters):
+- Warm, measured analyst tone — knowledgeable older-cousin energy, not radio-host.
+- Slightly slower than a normal assistant voice; let key facts land before moving on.
+- Short sentences suitable for telephone audio.
+- Pause briefly after severity labels, CVE identifiers, and action recommendations.
+- When using dry wit, deliver it flat — never a forced punch line.
+- If you need to say a CVE number aloud, say each segment naturally — "CVE twenty twenty-four, twelve thousand three forty-five" — not letter-by-letter.
+
 ${shared}
 
 Conversation style:
@@ -637,6 +660,14 @@ Style guide:
 - Calm, confident, direct.
 - Less procedural. More like a real SOC lead briefing a human.
 - Keep responses short and interactive.
+
+Voice delivery (this is a phone call — pace, not just words, matters):
+- Speak like a senior cyber duty officer giving a SITREP.
+- Calm, authoritative, unhurried. Slightly slower than a normal assistant voice.
+- Short sentences suitable for telephone audio.
+- Pause briefly after severity labels ("Critical."), CVE identifiers ("CVE-2024-12345 …"), and action recommendations.
+- Do not sound cheerful, performative, or apologetic. Do not over-explain.
+- If you need to say a CVE number aloud, say each segment naturally — "CVE twenty twenty-four, twelve thousand three forty-five" — not letter-by-letter.
 
 ${shared}
 
@@ -1844,6 +1875,7 @@ wss.on('connection', async (twilioWs, req, auth) => {
           audio: {
             input: {
               format: { type: 'audio/pcmu' },
+              noise_reduction: NOISE_REDUCTION_CONFIG,
               transcription: {
                 model: 'gpt-4o-transcribe',
                 language: 'en',
@@ -1859,6 +1891,7 @@ wss.on('connection', async (twilioWs, req, auth) => {
             output: {
               format: { type: 'audio/pcmu' },
               voice: OPENAI_VOICE,
+              ...(OPENAI_OUTPUT_SPEED ? { speed: OPENAI_OUTPUT_SPEED } : {}),
             },
           },
 
