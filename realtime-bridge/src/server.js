@@ -11,19 +11,36 @@ const OPENAI_VOICE = process.env.OPENAI_VOICE || 'marin';
 
 // Audio input noise reduction. Phone audio benefits from near_field; set to
 // 'far_field' for room-mic scenarios. If unset, defaults to near_field; set
-// to 'none' or '' to disable.
-const OPENAI_NOISE_REDUCTION = (process.env.OPENAI_NOISE_REDUCTION || 'near_field').toLowerCase();
-const NOISE_REDUCTION_CONFIG =
-  OPENAI_NOISE_REDUCTION === 'none' || OPENAI_NOISE_REDUCTION === ''
-    ? null
-    : { type: OPENAI_NOISE_REDUCTION };
+// to 'none' to disable.
+const NOISE_REDUCTION_ALLOWED = ['near_field', 'far_field', 'none'];
+const OPENAI_NOISE_REDUCTION_RAW = (process.env.OPENAI_NOISE_REDUCTION || 'near_field').toLowerCase();
+if (!NOISE_REDUCTION_ALLOWED.includes(OPENAI_NOISE_REDUCTION_RAW)) {
+  console.error(
+    `[config] Invalid OPENAI_NOISE_REDUCTION "${OPENAI_NOISE_REDUCTION_RAW}"; ` +
+      `allowed: ${NOISE_REDUCTION_ALLOWED.join(', ')}. Falling back to near_field.`,
+  );
+}
+const OPENAI_NOISE_REDUCTION = NOISE_REDUCTION_ALLOWED.includes(OPENAI_NOISE_REDUCTION_RAW)
+  ? OPENAI_NOISE_REDUCTION_RAW
+  : 'near_field';
+const NOISE_REDUCTION_CONFIG = OPENAI_NOISE_REDUCTION === 'none' ? null : { type: OPENAI_NOISE_REDUCTION };
 
-// Output playback speed. Server default is 1.0; values 0.85–1.15 are typical.
+// Output playback speed. Server default is 1.0; values 0.25–4.0 accepted by the API.
 // Leave unset to inherit the server default.
 const OPENAI_OUTPUT_SPEED_RAW = process.env.OPENAI_OUTPUT_SPEED;
-const OPENAI_OUTPUT_SPEED = OPENAI_OUTPUT_SPEED_RAW
-  ? parseFloat(OPENAI_OUTPUT_SPEED_RAW)
-  : null;
+const OPENAI_OUTPUT_SPEED = (() => {
+  if (OPENAI_OUTPUT_SPEED_RAW == null || OPENAI_OUTPUT_SPEED_RAW === '') return null;
+  const parsed = parseFloat(OPENAI_OUTPUT_SPEED_RAW);
+  if (!Number.isFinite(parsed)) {
+    console.error(`[config] OPENAI_OUTPUT_SPEED "${OPENAI_OUTPUT_SPEED_RAW}" is not a valid number; ignoring.`);
+    return null;
+  }
+  if (parsed < 0.25 || parsed > 4.0) {
+    console.error(`[config] OPENAI_OUTPUT_SPEED ${parsed} is outside the accepted range 0.25–4.0; ignoring.`);
+    return null;
+  }
+  return parsed;
+})();
 
 // Tool execution logging:
 //  - none: no tool logs beyond existing
@@ -1892,7 +1909,7 @@ wss.on('connection', async (twilioWs, req, auth) => {
             output: {
               format: { type: 'audio/pcmu' },
               voice: OPENAI_VOICE,
-              ...(OPENAI_OUTPUT_SPEED ? { speed: OPENAI_OUTPUT_SPEED } : {}),
+              ...(Number.isFinite(OPENAI_OUTPUT_SPEED) ? { speed: OPENAI_OUTPUT_SPEED } : {}),
             },
           },
 

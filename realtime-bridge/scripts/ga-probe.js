@@ -28,11 +28,31 @@ const VOICE = process.env.OPENAI_VOICE || 'marin';
 const AUDIO_FORMAT = process.env.PROBE_AUDIO_FORMAT || 'audio/pcmu';
 const DURATION_MS = parseInt(process.env.PROBE_DURATION_MS || '8000', 10);
 
+const NOISE_REDUCTION_ALLOWED = ['near_field', 'far_field', 'none'];
 const NOISE_REDUCTION_RAW = (process.env.OPENAI_NOISE_REDUCTION || 'near_field').toLowerCase();
-const NOISE_REDUCTION =
-  NOISE_REDUCTION_RAW === 'none' || NOISE_REDUCTION_RAW === '' ? null : { type: NOISE_REDUCTION_RAW };
+if (!NOISE_REDUCTION_ALLOWED.includes(NOISE_REDUCTION_RAW)) {
+  console.error(
+    `[probe] Invalid OPENAI_NOISE_REDUCTION "${NOISE_REDUCTION_RAW}"; ` +
+      `allowed: ${NOISE_REDUCTION_ALLOWED.join(', ')}. Falling back to near_field.`,
+  );
+}
+const NOISE_REDUCTION_VAL = NOISE_REDUCTION_ALLOWED.includes(NOISE_REDUCTION_RAW) ? NOISE_REDUCTION_RAW : 'near_field';
+const NOISE_REDUCTION = NOISE_REDUCTION_VAL === 'none' ? null : { type: NOISE_REDUCTION_VAL };
 
-const OUTPUT_SPEED = process.env.OPENAI_OUTPUT_SPEED ? parseFloat(process.env.OPENAI_OUTPUT_SPEED) : null;
+const OUTPUT_SPEED = (() => {
+  const raw = process.env.OPENAI_OUTPUT_SPEED;
+  if (raw == null || raw === '') return null;
+  const parsed = parseFloat(raw);
+  if (!Number.isFinite(parsed)) {
+    console.error(`[probe] OPENAI_OUTPUT_SPEED "${raw}" is not a valid number; ignoring.`);
+    return null;
+  }
+  if (parsed < 0.25 || parsed > 4.0) {
+    console.error(`[probe] OPENAI_OUTPUT_SPEED ${parsed} is outside the accepted range 0.25–4.0; ignoring.`);
+    return null;
+  }
+  return parsed;
+})();
 
 const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(MODEL)}`;
 
@@ -76,7 +96,7 @@ const sessionUpdate = {
       output: {
         format: { type: AUDIO_FORMAT },
         voice: VOICE,
-        ...(OUTPUT_SPEED ? { speed: OUTPUT_SPEED } : {}),
+        ...(Number.isFinite(OUTPUT_SPEED) ? { speed: OUTPUT_SPEED } : {}),
       },
     },
   },
