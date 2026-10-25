@@ -66,3 +66,93 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/asterisk-twilio-pbx:${{ github.sha }}
           # Optionally, build arguments or labels could be added here to
           # record build-time metadata (such as git SHA, build date, etc.).
+
+  # Scan the image just pushed and publish its SBOM to the Tiger Blue SBOM
+  # service, so the PBX image is tracked next to the hosted services.
+  # Scans the manifest for the runner's platform (linux/amd64); the arm
+  # variants are built from the same Dockerfile and differ only in the
+  # architecture of the same Debian packages.
+  sbom:
+    name: Trivy scan + SBOM of the pushed image
+    needs: [build-and-push]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/asterisk-twilio-pbx:${{ github.sha }}
+      TIGER_WATCH_URL: ${{ vars.TIGER_WATCH_URL || 'https://tiger-watch.fly.dev' }}
+      TIGER_WATCH_API_KEY: ${{ secrets.TIGER_WATCH_API_KEY }}
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trivy vulnerability scan (SARIF)
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+        continue-on-error: true
+
+      - name: Trivy vulnerability scan (table)
+        # Non-blocking: the image is already pushed by the time this runs,
+        # and the base is debian:bullseye-slim, which is past its security
+        # support — the first runs establish how much that costs.
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Generate SBOM
+        # SPDX-JSON: the only format the Tiger Blue SBOM service parses. The
+        # document is named after the image reference, so each build is a
+        # new document and the history stays.
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: spdx-json
+          output: sbom.spdx.json
+
+      - name: Upload SBOM artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom
+          path: sbom.spdx.json
+
+      - name: Publish SBOM to Tiger Watch
+        # Needs the TIGER_WATCH_API_KEY repository secret (the shared upload
+        # key the other Tiger Blue repos use); skipped with a warning until
+        # it is set.
+        if: github.ref == 'refs/heads/main' && env.TIGER_WATCH_API_KEY != ''
+        run: |
+          curl -sf --retry 3 --retry-delay 5 -X POST \
+            "${TIGER_WATCH_URL}/sbom/upload" \
+            -H "X-API-Key: ${TIGER_WATCH_API_KEY}" \
+            -F "file=@sbom.spdx.json" \
+            -F "vendor=tigerblue" \
+            -F "device_type=container:asterisk-twilio-pbx" \
+            -F "notes=CI ${GITHUB_SHA} run ${GITHUB_RUN_ID}"
+
+      - name: SBOM not published (no key)
+        if: github.ref == 'refs/heads/main' && env.TIGER_WATCH_API_KEY == ''
+        run: echo "::warning::TIGER_WATCH_API_KEY is not set on this repository; the SBOM was built but not published to Tiger Watch."
