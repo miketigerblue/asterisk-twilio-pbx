@@ -71,7 +71,7 @@ jobs:
   # service, so the PBX image is tracked next to the hosted services.
   # Scans the manifest for the runner's platform (linux/amd64); the arm
   # variants are built from the same Dockerfile and differ only in the
-  # architecture of the same Debian packages.
+  # architecture of the same Alpine packages.
   sbom:
     name: Trivy scan + SBOM of the pushed image
     needs: [build-and-push]
@@ -111,9 +111,9 @@ jobs:
         continue-on-error: true
 
       - name: Trivy vulnerability scan (table)
-        # Non-blocking: the image is already pushed by the time this runs,
-        # and the base is debian:bullseye-slim, which is past its security
-        # support — the first runs establish how much that costs.
+        # Non-blocking: the image is already pushed by the time this runs.
+        # The base is alpine:3.22, so findings here are Alpine or Asterisk
+        # advisories with fixes a rebuild picks up.
         uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: ${{ env.IMAGE }}

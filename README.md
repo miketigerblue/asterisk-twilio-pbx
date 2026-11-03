@@ -275,7 +275,7 @@ asterisk-twilio-pbx/
     rtp.conf                # RTP range (10000-10100)
     modules.conf            # Module config
   docker/
-    Dockerfile              # Debian bullseye + asterisk + openssl/ca-certificates
+    Dockerfile              # Alpine 3.22 + Asterisk 20 + openssl/ca-certificates
     entrypoint.sh           # env validation + cert generation + envsubst
   compose/
     docker-compose.dev.yml  # dev compose (ports published, bind-mounted configs)
