@@ -93,7 +93,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Trivy vulnerability scan (SARIF)
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}
           format: sarif
@@ -114,7 +114,7 @@ jobs:
         # Non-blocking: the image is already pushed by the time this runs.
         # The base is alpine:3.22, so findings here are Alpine or Asterisk
         # advisories with fixes a rebuild picks up.
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}
           format: table
@@ -126,7 +126,7 @@ jobs:
         # SPDX-JSON: the only format the Tiger Blue SBOM service parses. The
         # document is named after the image reference, so each build is a
         # new document and the history stays.
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}
           format: spdx-json
