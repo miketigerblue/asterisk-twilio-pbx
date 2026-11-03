@@ -47,7 +47,7 @@ The system decomposes into **two planes**:
 
 | Component | Technology | Deployment |
 |---|---|---|
-| **PBX** | Asterisk (PJSIP) in Docker (Debian bullseye-slim) | Raspberry Pi via Ansible, or macOS for dev |
+| **PBX** | Asterisk 20 (PJSIP) in Docker (Alpine 3.22) | Raspberry Pi via Ansible, or macOS for dev |
 | **Call control** | Twilio Functions (serverless JS) | Twilio Programmable Voice |
 | **Realtime bridge** | Node.js WebSocket server (~2300 LOC), `ws` + `node-fetch` | Fly.io (`lhr` region, 1 vCPU / 1GB) |
 | **AI model** | OpenAI Realtime API (configurable model, default `gpt-realtime-2025-08-28`) | OpenAI cloud |
@@ -57,7 +57,7 @@ The system decomposes into **two planes**:
 ### Key repository components:
 
 - `asterisk/` — PJSIP config template, dialplan, RTP range, ConfBridge profiles, module config.
-- `docker/` — Dockerfile (Debian bullseye + Asterisk + envsubst) and entrypoint (env validation, TLS cert generation, config rendering).
+- `docker/` — Dockerfile (Alpine 3.22 + Asterisk 20 + envsubst) and entrypoint (env validation, TLS cert generation, config rendering).
 - `compose/` — Dev and Pi Docker Compose files.
 - `ansible/` — Inventory, playbook, role (`pbx_pi`) for idempotent Raspberry Pi deployment.
 - `realtime-bridge/` — The WebSocket bridge server, Fly.io config, and reference Twilio Functions for `/dial` and `/dial-result`.

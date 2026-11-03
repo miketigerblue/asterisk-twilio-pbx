@@ -1,70 +1,70 @@
 # Dockerfile for containerised Asterisk PBX for Twilio SIP trunking
 #
 # This image is designed to:
-# - Run Asterisk on a minimal Debian base image for a smaller footprint.
+# - Run Asterisk on a small, security-supported base image.
 # - Use environment variables to inject Twilio SIP trunk credentials securely at runtime.
 # - Support both local development (with bind-mounted configuration) and production/PI usage (with configs baked in).
 # - Serve as the build context for multi-architecture images (amd64 + arm variants) via Docker Buildx / GitHub Actions.
 
-# We use a specific Debian slim release (bullseye) rather than the moving
-# `stable` tag. Asterisk has been removed from newer Debian releases, but
-# Debian 11 (bullseye) still ships the `asterisk` packages we rely on.
-# Pinning to bullseye-slim ensures `apt-get install asterisk` works reliably
-# across architectures while keeping the image reasonably up to date.
-FROM debian:bullseye-slim
+# Base: Alpine 3.22, which packages Asterisk 20 (LTS) in its main repository
+# for x86_64, armv7 and aarch64 — the three platforms this image is built
+# for. Debian stopped shipping Asterisk after bullseye (11), and bullseye
+# left security support in August 2026: its security archive now returns
+# 404 for every package, so the previous debian:bullseye-slim base could no
+# longer be built, let alone patched. Alpine's asterisk package tracks the
+# upstream LTS branch and receives security updates for the life of the
+# release.
+FROM alpine:3.22
 
 # ------------------------------
 # Core system preparation
 # ------------------------------
-# - Update package index.
-# - Install Asterisk and common supporting packages.
-# - Install gettext-base to provide `envsubst` for templating pjsip.conf.
-# - Clean up apt caches to keep the image smaller.
+# Packages chosen:
+#   - asterisk: core PBX server (chan_pjsip, app_confbridge, outbound
+#     registration and the rest of the standard module set).
+#   - asterisk-sample-config: the full default /etc/asterisk so Asterisk
+#     starts with sane logger/asterisk/indications config; the files this
+#     image owns are copied over the samples below.
+#   - asterisk-sounds-en: basic English sound prompts (beep, ss-noservice,
+#     pm-invalid-extension and the ConfBridge join/leave announcements).
+#   - asterisk-srtp: res_srtp, required for media_encryption=sdes on the
+#     Twilio endpoint.
+#   - bash: the entrypoint is a bash script.
+#   - gettext-envsubst: supplies `envsubst` for pjsip.conf templating.
+#   - openssl, ca-certificates: self-signed PJSIP TLS cert generation and
+#     the CA bundle used to verify Twilio's certificate.
+#   - iproute2, procps-ng, less, nano: lightweight troubleshooting and
+#     on-container editing tools.
 RUN set -eux; \
-    apt-get update; \
-    # Install Asterisk, sounds, and useful debugging/tools packages.
-    # Packages chosen:
-    #   - asterisk: core PBX server.
-    #   - asterisk-core-sounds-en: basic English sound prompts.
-    #   - asterisk-modules: common additional modules.
-    #   - iproute2: useful for network debugging inside the container.
-    #   - net-tools: includes netstat, ifconfig, etc. for troubleshooting.
-    #   - vim-tiny, nano, less: lightweight tools for on-container editing and viewing.
-    #   - procps: provides ps/top for process inspection.
-    #   - gettext-base: supplies `envsubst` for configuration templating.
-    apt-get install -y --no-install-recommends \
+    apk add --no-cache \
         asterisk \
-        asterisk-core-sounds-en \
-        asterisk-modules \
-        iproute2 \
-        net-tools \
-        vim-tiny \
-        nano \
-        less \
-        procps \
-        gettext-base \
+        asterisk-sample-config \
+        asterisk-sounds-en \
+        asterisk-srtp \
+        bash \
+        gettext-envsubst \
+        openssl \
         ca-certificates \
-        openssl; \
-    # Remove apt lists to reduce image size.
-    rm -rf /var/lib/apt/lists/*
+        iproute2 \
+        procps-ng \
+        less \
+        nano
 
-# Some Debian Asterisk packages expect a default MOH directory. In container
+# Some Asterisk configurations expect a default MOH directory. In container
 # deployments we don't use MOH, but creating the directory avoids noisy startup
-# warnings like: "Error opening directory - /usr/share/asterisk/moh".
+# warnings like: "Error opening directory - /var/lib/asterisk/moh".
 RUN set -eux; \
-    mkdir -p /usr/share/asterisk/moh
+    mkdir -p /var/lib/asterisk/moh /usr/share/asterisk/moh
 
 # ------------------------------
 # Asterisk user and permissions
 # ------------------------------
-# Asterisk typically runs under its own user for security. The package will
-# usually create this user and group, but we explicitly ensure that the
-# directories we care about are owned correctly.
+# Asterisk runs under its own user for security. The package creates the
+# user and group; we explicitly ensure that the directories Asterisk writes
+# to (config, logs, spool, run, astdb) are owned correctly.
 RUN set -eux; \
-    # Ensure configuration and runtime directories exist and are owned by the
-    # asterisk user so that Asterisk can write logs, spool, etc.
-    mkdir -p /etc/asterisk /var/log/asterisk /var/spool/asterisk /var/run/asterisk; \
-    chown -R asterisk:asterisk /etc/asterisk /var/log/asterisk /var/spool/asterisk /var/run/asterisk
+    mkdir -p /etc/asterisk /var/log/asterisk /var/spool/asterisk /var/run/asterisk /var/lib/asterisk /var/lib/asterisk/keys; \
+    chown -R asterisk:asterisk /etc/asterisk /var/log/asterisk /var/spool/asterisk /var/run/asterisk /var/lib/asterisk
 
 # ------------------------------
 # Copy Asterisk configuration templates
@@ -89,8 +89,7 @@ COPY --chown=asterisk:asterisk asterisk/confbridge.conf  /etc/asterisk/confbridg
 # - Rendering pjsip.conf from pjsip.conf.template using envsubst.
 # - Starting Asterisk in the foreground so the container behaves well under
 #   Docker / Compose / Kubernetes supervision.
-COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY --chmod=755 docker/entrypoint.sh /entrypoint.sh
 
 # ------------------------------
 # Expose SIP and RTP ports
@@ -98,7 +97,7 @@ RUN chmod +x /entrypoint.sh
 # SIP:
 #   - 5060/udp: traditional UDP SIP signalling.
 #   - 5060/tcp: TCP SIP signalling in case it is required.
-#   - 5061/tcp: reserved for future TLS SIP signalling.
+#   - 5061/tcp: TLS SIP signalling (the Twilio trunk transport).
 # RTP (media):
 #   - 10000-10100/udp: typical RTP port range used by Asterisk; this can be
 #     expanded or tuned in rtp.conf if necessary.
